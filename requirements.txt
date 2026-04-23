@@ -3,6 +3,8 @@ torch
 spacy
 transformers
 requests
+google-genai
+python-dotenv
 pandas
 networkx
 pdfplumber

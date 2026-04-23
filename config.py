@@ -1,4 +1,9 @@
-LLM_URL = "http://192.168.1.18:8080"
+# ── LLM Backend (Google Gemini) ───────────────────────────────────────────────
+# API key is read from the GOOGLE_API_KEY environment variable.
+GEMINI_MODEL = "gemini-3-flash-preview"
+
+# Legacy: local llama.cpp server (no longer used)
+# LLM_URL = "http://192.168.1.18:8080"
 GLINER_MODEL = "urchade/gliner_medium-v2.1"
 GLIREL_MODEL = "jackboyla/glirel-large-v0"
 ESGBERT_MODEL = "ESGBERT/EnvironmentalBERT-environmental"

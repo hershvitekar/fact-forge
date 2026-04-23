@@ -34,8 +34,12 @@ def build_graph(document, entities, relations, taxonomy, topics, quant_qual,
         if should_filter_entity(text):
             continue
 
-        norm_text = normalize_text(text)
         raw_label = entity["label"]
+        norm_text = normalize_text(text, label=raw_label)
+
+        # Skip if we already added a node with this exact normalized text
+        if norm_text in node_id_map:
+            continue
 
         # ── Task 7: reclassify misidentified entity types ──────────────────────
         label = reclassify_entity_label(text, raw_label)
@@ -103,10 +107,12 @@ def link_after_enrichment(graph: nx.DiGraph) -> None:
 
 def _handle_observation(graph, obs, company_node):
     """Create structured nodes for a MetricObservation."""
-    metric_name = normalize_text(obs.get("metric", "Unknown Metric"))
+    metric_name = normalize_text(obs.get("metric", "Unknown Metric"), label="ESG Metric")
     value       = str(obs.get("value", ""))
-    year        = str(obs.get("year", ""))
-    unit        = normalize_text(obs.get("unit", ""))
+    year_raw    = obs.get("year")
+    year        = str(year_raw).strip() if year_raw is not None else ""
+    if year.lower() == "none": year = ""
+    unit        = normalize_text(obs.get("unit", ""), label="Unit of Measure")
 
     obs_id    = f"obs_{metric_name}_{year}".replace(" ", "_").lower()
     metric_id = f"met_{metric_name}".replace(" ", "_").lower()
@@ -132,7 +138,9 @@ def _handle_observation(graph, obs, company_node):
 def _handle_target(graph, target, company_node):
     """Create structured nodes for a Target."""
     target_type = target.get("target_type", "General Target")
-    year        = str(target.get("target_year", ""))
+    year_raw    = target.get("target_year")
+    year        = str(year_raw).strip() if year_raw is not None else ""
+    if year.lower() == "none": year = ""
 
     target_id = f"target_{target_type}_{year}".replace(" ", "_").lower()
     graph.add_node(target_id,
@@ -151,7 +159,9 @@ def _handle_event(graph, event, company_node):
     metric     = event.get("metric", "")
     value      = event.get("value", "")
     unit       = event.get("unit", "")
-    year       = str(event.get("year", ""))
+    year_raw   = event.get("year")
+    year       = str(year_raw).strip() if year_raw is not None else ""
+    if year.lower() == "none": year = ""
 
     display_text = f"{metric} {event_type}: {value} {unit}".strip() if metric else f"{event_type}: {value} {unit}".strip()
     event_id     = f"event_{event_type}_{metric}_{year}".replace(" ", "_").lower()
@@ -171,13 +181,23 @@ def _handle_event(graph, event, company_node):
 
 
 def _handle_simple_relation(graph, rel, node_id_map, threshold):
-    """Handle standard GLiREL relations."""
-    score = rel.get("score", 1.0)
-    if score < threshold:
+    """Create edge for a standard relation if above threshold."""
+    if rel.get("score", 1.0) < threshold:
         return
 
-    head_norm = normalize_text(rel.get("head", ""))
-    tail_norm = normalize_text(rel.get("tail", ""))
+    head = rel.get("head")
+    tail = rel.get("tail")
+    if not head or not tail:
+        return
+
+    # Handle if head or tail is a list (bug from previous logic)
+    if isinstance(head, list):
+        head = head[0] if head else ""
+    if isinstance(tail, list):
+        tail = tail[0] if tail else ""
+
+    head_norm = normalize_text(head)
+    tail_norm = normalize_text(tail)
 
     src = node_id_map.get(head_norm)
     tgt = node_id_map.get(tail_norm)
@@ -185,7 +205,7 @@ def _handle_simple_relation(graph, rel, node_id_map, threshold):
     if src and tgt and src != tgt:
         graph.add_edge(src, tgt,
                        relation=rel.get("relation", "related_to"),
-                       score=score)
+                       score=rel.get("score", 1.0))
 
 
 # ── Task 4: Co-occurrence value anchoring ─────────────────────────────────────

@@ -42,7 +42,9 @@ UNIT_MAPPING = {
 STOP_ENTITIES = {
     'we', 'us', 'our', 'it', 'they', 'them', 'their', 'everyone', 'all',
     'undertaking', 'company', 'organization', 'group', 'entity', 'this', 'that',
-    'report', 'disclosure', 'information', 'data', 'year', 'period'
+    'report', 'disclosure', 'information', 'data', 'year', 'period',
+    'might', 'could', 'would', 'should', 'can', 'may', 'must', 'will',
+    'also', 'many', 'some', 'any', 'such', 'these', 'those'
 }
 
 # ── Task 1: PDF Artifact Filtering ─────────────────────────────────────────────
@@ -142,7 +144,7 @@ def reclassify_entity_label(text: str, label: str) -> str:
 
 
 # ── Existing normalization helpers ────────────────────────────────────────────
-def normalize_text(text):
+def normalize_text(text, label=None):
     """Normalize text by lowercasing, stripping, and mapping synonyms/units."""
     if not text:
         return ""
@@ -153,14 +155,23 @@ def normalize_text(text):
     text = text.lower().strip()
     text = re.sub(r'\s+', ' ', text)
 
-    # Apply unit mapping first
+    has_digits = any(char.isdigit() for char in text)
+
+    # Apply unit mapping
     for pattern, canonical in UNIT_MAPPING.items():
         if re.search(pattern, text):
-            return canonical
+            if has_digits or label == "Quantitative Value":
+                text = re.sub(pattern, canonical, text)
+            else:
+                return canonical
 
     # Apply synonym mapping
     for pattern, canonical in ESG_SYNONYMS.items():
         if re.search(pattern, text):
-            return canonical.strip()
+            if has_digits and "scope" not in pattern.lower() and "co2" not in pattern.lower():
+                # Don't obliterate strings with numbers unless it's a known metric with numbers
+                text = re.sub(pattern, canonical, text)
+            else:
+                return canonical.strip()
 
     return text.title()  # Return title case for display if no synonym found

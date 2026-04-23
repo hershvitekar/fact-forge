@@ -19,7 +19,7 @@ from extraction.entity_extract import extract_entities
 from extraction.section_ranker import rank_sections  # used by taxonomy discovery
 from assembly.graph_builder import link_after_enrichment
 from extraction.relation_extract import extract_relations
-from extraction.llm_relations import infer_complex_relations
+from extraction.llm_relations import resolve_ambiguities
 from extraction.event_extractor import extract_events
 from assembly.dedup import deduplicate_entities
 from assembly.graph_builder import build_graph
@@ -40,7 +40,7 @@ def write_insights(text: str, destination: Path) -> None:
 
 
 def main(source_path: str = None, skip_llm: bool = False, relation_threshold: float = 0.08, 
-         llm_only: bool = False, save_intermediates: bool = False) -> None:
+         llm_only: bool = False, save_intermediates: bool = True) -> None:
     logging.basicConfig(
         level=logging.INFO, 
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -55,7 +55,12 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     logging.info("[STAGE 1/5] PARSING & DISCOVERY")
     
     document = parse_document(source_path)
-    cache_path = OUTPUT_DIR / "intermediates.json"
+    
+    report_name = Path(source_path).stem
+    report_out_dir = OUTPUT_DIR / report_name
+    report_out_dir.mkdir(parents=True, exist_ok=True)
+    
+    cache_path = report_out_dir / "intermediates.json"
 
     if llm_only:
         if not cache_path.exists():
@@ -70,16 +75,19 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
             quant_qual = cache.get("quant_qual", {})
             entities = cache.get("entities", [])
             relations = cache.get("relations", [])
+        document["sentences"] = sentences  # attach for downstream modules
     else:
         logging.info("Loading NLP models into RAM...")
         models = load_models()
         logging.info("Running document prescan...")
         prescan = run_spacy_prescan(document, models.nlp)
         sentences = prescan.get("sentences", [])
+        document["sentences"] = sentences  # attach for downstream modules
         
         taxonomy = discover_taxonomy(document, prescan)
         logging.info("Classifying ESG thematic coverage...")
         topics = classify_esg_topics(document, models)
+        quant_qual = extract_quant_qual(document)
         logging.info("[STAGE 2/5] EXTRACTION")
         entities = extract_entities(document, models.gliner, sentences)
         relations = extract_relations(document, models.glirel, sentences, entities)
@@ -104,11 +112,11 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     if main_company:
         logging.info("Global Anchor identified: %s", main_company)
 
-    logging.info("[STAGE 3/5] LLM COMPLEX REASONING (CHUNKED)")
+    logging.info("[STAGE 3/5] TARGETED LLM DISAMBIGUATION")
     if skip_llm:
         complex_relations = relations
     else:
-        complex_relations = infer_complex_relations(document, relations, main_company=main_company)
+        complex_relations = resolve_ambiguities(document, entities, relations, main_company=main_company)
 
     # 3. Extract rule-based events
     events = extract_events(sentences)
@@ -125,6 +133,11 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     # page_number attributes are only populated by enrich_metadata().
     link_after_enrichment(graph)
 
+    isolated_nodes = list(nx.isolates(graph))
+    if isolated_nodes:
+        graph.remove_nodes_from(isolated_nodes)
+        logging.info("Pruned %d isolated nodes from the graph to reduce noise", len(isolated_nodes))
+
     logging.info("[STAGE 4/5] GRAPH ENRICHMENT & ALGORITHMS")
     graph = run_graph_algorithms(graph)
 
@@ -132,11 +145,11 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     # Both paths use generate_narrative — skip_llm forces the structured fallback
     # inside narrative.py (LLM query is skipped when LLM is unavailable anyway).
     # This ensures entity-level data always appears in insights.md.
-    narrative = generate_narrative(graph, topics, quant_qual)
+    narrative = generate_narrative(graph, topics, quant_qual, document, output_dir=report_out_dir)
 
     # 5. Export
-    graph_path = OUTPUT_DIR / "graph.graphml"
-    insights_path = OUTPUT_DIR / "insights.md"
+    graph_path = report_out_dir / "graph.graphml"
+    insights_path = report_out_dir / "insights.md"
     logging.info("Exporting graph to %s", graph_path)
     nx.write_graphml(graph, str(graph_path))
 
@@ -144,7 +157,7 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     write_insights(narrative, insights_path)
 
     # V2: Export structured data
-    export_kg(graph, OUTPUT_DIR)
+    export_kg(graph, report_out_dir)
     logging.info("Pipeline finished successfully")
 
 
@@ -153,7 +166,8 @@ if __name__ == "__main__":
     parser.add_argument("source_path", nargs="?", default="input/document.pdf", help="Path to the PDF document.")
     parser.add_argument("--skip-llm", action="store_true", help="Skip LLM-based relation extraction and narrative generation.")
     parser.add_argument("--llm-only", action="store_true", help="Skip extraction and only run LLM steps using cached intermediates.")
-    parser.add_argument("--save-intermediates", action="store_true", help="Save intermediate extraction results to cache.")
+    parser.add_argument("--no-cache", action="store_false", dest="save_intermediates", help="Do not save intermediate extraction results to cache.")
+    parser.set_defaults(save_intermediates=True)
     parser.add_argument("--relation-threshold", type=float, default=0.08, help="Minimum confidence score for relationships (0.0 to 1.0).")
     
     args = parser.parse_args()

@@ -102,7 +102,7 @@ def _detect_main_company(graph) -> str:
     return best_name
 
 
-def generate_narrative(graph, topics, quant_qual):
+def generate_narrative(graph, topics, quant_qual, document=None, output_dir=None):
     """
     Generate a professional ESG narrative summary from the V2 Knowledge Graph.
 
@@ -117,8 +117,7 @@ def generate_narrative(graph, topics, quant_qual):
     entity_block  = _build_entity_summary(graph)
     obs_str, target_str, event_str = _extract_typed_nodes(graph)
 
-    prompt = f"""[INST] <<SYS>>
-You are a senior ESG analyst writing a professional investor-grade narrative for a company's annual sustainability report.
+    system_prompt = """You are a senior ESG analyst writing a professional investor-grade narrative for a company's annual sustainability report.
 
 STRICT RULES:
 - Output ONLY the narrative text. No labels, no headers, no meta-commentary.
@@ -127,10 +126,9 @@ STRICT RULES:
 - Name the company explicitly — do not write "the company" if the name is known.
 - Only compare metrics that refer to the same subject across years.
 - Include specific numbers, percentages, and targets from the data provided.
-- Structure: Environmental performance → Social/Workforce → Governance → Outlook.
-<</SYS>>
+- Structure: Environmental performance → Social/Workforce → Governance → Outlook."""
 
-COMPANY: {company_name}
+    prompt = f"""COMPANY: {company_name}
 
 TOPIC CLASSIFICATION SCORES (E/S/G):
 {topics}
@@ -146,10 +144,14 @@ COMMITMENTS & TARGETS:
 KEY EVENTS (CHANGES):
 {event_str}
 
-NARRATIVE:
-[/INST]"""
+Write the narrative now."""
 
-    response = query_llm(prompt)
+    if output_dir:
+        prompt_path = output_dir / "llm_prompt.txt"
+        with open(prompt_path, "w", encoding="utf-8") as f:
+            f.write(f"SYSTEM PROMPT:\n{system_prompt}\n\n" + "="*40 + f"\n\nUSER PROMPT:\n{prompt}")
+
+    response = query_llm(prompt, system_prompt=system_prompt)
 
     if not response:
         # ── Structured fallback (no LLM available) ────────────────────────────
@@ -160,7 +162,7 @@ NARRATIVE:
     clean = response.strip()
     for marker in [
         "Response:", "NARRATIVE SUMMARY:", "Narrative Summary:",
-        "Summary:", "NAME_1", "NARRATIVE:", "[/INST]",
+        "Summary:", "NAME_1", "NARRATIVE:",
     ]:
         if clean.startswith(marker):
             clean = clean[len(marker):].strip()
