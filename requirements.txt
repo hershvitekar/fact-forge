@@ -1,0 +1,16 @@
+# Core
+torch
+spacy
+transformers
+requests
+pandas
+networkx
+pdfplumber
+
+# Specialized NLP
+gliner
+glirel
+sentence-transformers
+
+# Visualization
+pyvis

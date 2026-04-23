@@ -1,0 +1,9 @@
+# ESG Report Sample
+
+The company is committed to reducing its Scope 1 emissions by 40% by 2030. 
+In 2023, we emitted 1500 tonnes of CO2e.
+Our energy consumption was 5000 MWh, of which 30% was from renewable energy sources like solar and wind.
+The board of directors oversees our climate strategy.
+We engage with stakeholders to ensure transparency and accountability.
+Our sustainability initiative "Green Future" contributes to SDG 13.
+Environmental risks include physical risks from extreme weather events.

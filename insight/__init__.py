@@ -1,0 +1,1 @@
+"""Insight generation utilities."""
