@@ -5,6 +5,66 @@ import json
 from difflib import SequenceMatcher
 from .normalization import normalize_text, should_filter_entity, reclassify_entity_label
 
+# ── Navigational Noise Pruning (Task 12) ──────────────────────────────
+NAVIGATIONAL_KEYWORDS = [
+    r"\bletter\b", r"\bleadership\b", r"\bprogress\b", r"\bplan\b", r"\bapproach\b",
+    r"\bculture\b", r"\bsafety\b", r"\bquality\b", r"\bmessage\b", r"\boverview\b",
+    r"\bhighlights\b", r"\bforward\b", r"\bcontents\b", r"\bappendix\b", r"\bglossary\b",
+    r"\bmethodology\b", r"\bintroduction\b", r"\bcontext\b", r"\bframework\b",
+    r"\babout\b", r"\breport\b", r"\bstrategy\b", r"\bvision\b", r"\bmission\b"
+]
+
+def prune_navigational_noise(graph):
+    """
+    Remove nodes that represent document sections/navigation rather than actual ESG facts.
+    Logic:
+    1. Node is NOT a core ESG fact type (Metric, Observation, Target, Event, Unit).
+    2. Node text matches navigational regexes.
+    3. Node degree is low (<= 2).
+    4. Node is NOT connected to an ESG Metric.
+    """
+    logging.info("Pruning navigational noise...")
+    nodes_to_remove = []
+    
+    # Core types we never prune this way
+    protected_types = {"ESG Metric", "MetricObservation", "Target", "Event", "Quantitative Value", "Unit of Measure"}
+    
+    nav_pattern = re.compile("|".join(NAVIGATIONAL_KEYWORDS), re.IGNORECASE)
+    
+    for n, d in list(graph.nodes(data=True)):
+        label = d.get("label", "")
+        if label in protected_types:
+            continue
+            
+        text = d.get("text", "") or d.get("original_text", "")
+        if not text:
+            continue
+            
+        # Check if it looks like navigation
+        if nav_pattern.search(text):
+            # Check connectivity to metrics
+            is_linked_to_metric = False
+            for neighbor in graph.neighbors(n):
+                if graph.nodes[neighbor].get("label") == "ESG Metric":
+                    is_linked_to_metric = True
+                    break
+            if not is_linked_to_metric:
+                for pred in graph.predecessors(n):
+                    if graph.nodes[pred].get("label") == "ESG Metric":
+                        is_linked_to_metric = True
+                        break
+            
+            # If not linked to a metric and low degree, it's likely noise
+            # (degree <= 2 usually means it's only connected to a page and a pillar/company)
+            if not is_linked_to_metric and graph.degree(n) <= 2:
+                nodes_to_remove.append(n)
+                
+    if nodes_to_remove:
+        graph.remove_nodes_from(nodes_to_remove)
+        logging.info("Pruned %d navigational noise nodes", len(nodes_to_remove))
+    return graph
+
+
 
 def build_graph(document, entities, relations, taxonomy, topics, quant_qual,
                 relation_threshold=0.08, main_company=None):

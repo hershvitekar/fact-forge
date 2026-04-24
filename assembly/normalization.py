@@ -32,11 +32,15 @@ ESG_SYNONYMS = {
 
 # Unit canonicalization
 UNIT_MAPPING = {
-    r'\b(tonnes?|tons?|tco2e?)\b': 'tCO2e',
+    r'\b(tonnes?|tons?|metric tonnes?|tco2e?|mtco2e)\b': 'tCO2e',
     r'\b(mwh|megawatt.hours?)\b': 'MWh',
     r'\b(gwh|gigawatt.hours?)\b': 'GWh',
+    r'\b(tj|terajoules?)\b': 'TJ',
+    r'\b(gj|gigajoules?)\b': 'GJ',
+    r'\b(fte|full.time equivalents?)\b': 'FTE',
     r'\b%\b': '%',
 }
+
 
 # Entities to ignore (stop-entities)
 STOP_ENTITIES = {

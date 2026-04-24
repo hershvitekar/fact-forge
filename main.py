@@ -26,7 +26,7 @@ from classification.esg_topics import classify_esg_topics
 from classification.quant_qual import extract_quant_qual
 from extraction.entity_extract import extract_entities
 from extraction.section_ranker import rank_sections  # used by taxonomy discovery
-from assembly.graph_builder import link_after_enrichment
+from assembly.graph_builder import link_after_enrichment, prune_navigational_noise
 from extraction.relation_extract import extract_relations
 from extraction.llm_relations import resolve_ambiguities
 from extraction.event_extractor import extract_events
@@ -153,7 +153,12 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     # page_number attributes are only populated by enrich_metadata().
     link_after_enrichment(graph)
 
+    # ── Task 12: Prune Navigational Noise ────────────────────────────────
+    graph = prune_navigational_noise(graph)
+
     isolated_nodes = list(nx.isolates(graph))
+
+
     if isolated_nodes:
         graph.remove_nodes_from(isolated_nodes)
         logging.info("Pruned %d isolated nodes from the graph to reduce noise", len(isolated_nodes))

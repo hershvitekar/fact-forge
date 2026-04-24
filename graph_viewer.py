@@ -61,6 +61,7 @@ def view_graph(file_path=None):
         'Sustainability Framework': '#a78bfa', # violet
         'Quantitative Value': '#34d399',    # emerald
         'Unit of Measure': '#6ee7b7',       # light green
+        'Unknown Unit': '#cbd5e1',          # light gray/slate
         'Reporting Year': '#f472b6',        # pink
         # Structured fact types
         'MetricObservation': '#fb923c',     # orange
@@ -86,6 +87,7 @@ def view_graph(file_path=None):
         'YEAR_OVER_YEAR': '#e879f9', 'EVENT_ABOUT': '#fbbf24',
         'TARGET_FOR': '#f87171', 'GOVERNED_BY': '#a78bfa',
         'SUBSIDIARY_OF': '#60a5fa', 'CATEGORIZED_AS': '#e879f9',
+        'has_unit': '#6ee7b7', 'measured_as': '#34d399',
     }
 
     # Add Nodes
