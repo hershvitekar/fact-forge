@@ -48,14 +48,14 @@ def _similarity(a: str, b: str) -> float:
     return max(_token_jaccard(a, b), _sequence_similarity(a, b))
 
 
-def deduplicate_entities(entities: List[Dict]) -> List[Dict]:
+def deduplicate_entities(entities: List[Dict], main_company: str = None) -> List[Dict]:
     """
     Deduplicate entities using fuzzy similarity within label groups.
 
     Strategy:
     1. Exact (text, label) dedup first (fast path).
-    2. Within each label group, pairwise similarity check.
-       If similarity > FUZZY_THRESHOLD, keep the higher-scored entity.
+    2. Main Company Alias merging: Force-merge "The Company", "Boeing", etc.
+    3. Within each label group, pairwise similarity check.
     """
     if not entities:
         return entities
@@ -64,10 +64,27 @@ def deduplicate_entities(entities: List[Dict]) -> List[Dict]:
 
     # ── Step 1: Exact match dedup ──────────────────────────────────────────────
     seen_exact: dict = {}
+    
+    # Generic aliases for the main subject of the report
+    SELF_ALIASES = {"the company", "the group", "our operations", "our business", "the firm", "the organization"}
+    if main_company:
+        SELF_ALIASES.add(main_company.lower().strip())
+
     for ent in entities:
-        key = (ent["text"].lower().strip(), ent.get("label", ""))
+        text_lower = ent["text"].lower().strip()
+        label = ent.get("label", "")
+        
+        # Force-alias mapping: if it's a "Company" and matches a self-alias, use main_company text
+        if label == "Company" and main_company and text_lower in SELF_ALIASES:
+            key_text = main_company.lower().strip()
+            ent["text"] = main_company # update for downstream
+        else:
+            key_text = text_lower
+
+        key = (key_text, label)
         if key not in seen_exact or ent.get("score", 0) > seen_exact[key].get("score", 0):
             seen_exact[key] = ent
+            
     candidates = list(seen_exact.values())
 
     # ── Step 2: Fuzzy dedup within label groups ────────────────────────────────

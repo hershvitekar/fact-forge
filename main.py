@@ -20,6 +20,7 @@ from pathlib import Path
 
 from model_loader import load_models
 from parsers.pdf_parser import parse_document
+from parsers.table_processor import process_document_tables
 from discovery.spacy_prescan import run_spacy_prescan
 from discovery.taxonomy import discover_taxonomy
 from classification.esg_topics import classify_esg_topics
@@ -66,6 +67,18 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     document = parse_document(source_path)
     
     report_name = Path(source_path).stem
+
+    # --- TABLE PROCESSING INTEGRATION ---
+    if source_path.endswith(".md"):
+        json_tables_path = Path(source_path).parent / f"{report_name}_tables.json"
+        logging.info("Attempting to linearize tables from %s", json_tables_path)
+        document["text"] = process_document_tables(document["text"], json_tables_path)
+        # Update pages text as well since it's used in some modules
+        if document["pages"]:
+            document["pages"][0]["text"] = document["text"]
+            document["pages"][0]["end_offset"] = len(document["text"])
+    # -------------------------------------
+
     report_out_dir = OUTPUT_DIR / report_name
     report_out_dir.mkdir(parents=True, exist_ok=True)
     
@@ -143,7 +156,7 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     complex_relations += events
 
     # 4. Graph Assembly
-    deduped_entities = deduplicate_entities(entities)
+    deduped_entities = deduplicate_entities(entities, main_company=main_company)
     graph = build_graph(document, deduped_entities, complex_relations, taxonomy, topics, quant_qual, 
                         relation_threshold=relation_threshold, main_company=main_company)
     

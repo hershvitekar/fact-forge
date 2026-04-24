@@ -52,4 +52,21 @@ def parse_document(source_path: str):
             logging.error("pdfplumber extraction failed: %s", e)
             return document
 
+    elif path.suffix.lower() == ".md":
+        logging.info("Loading high-fidelity Markdown content...")
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+                document["text"] = content
+                # For Markdown, we treat it as a single logical page for consistency
+                document["pages"].append({
+                    "page_number": 1,
+                    "text": content,
+                    "start_offset": 0,
+                    "end_offset": len(content),
+                })
+        except Exception as e:
+            logging.error("Markdown reading failed: %s", e)
+            return document
+
     return document

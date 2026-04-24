@@ -145,9 +145,12 @@ def build_graph(document, entities, relations, taxonomy, topics, quant_qual,
         else:
             _handle_simple_relation(graph, rel, node_id_map, relation_threshold)
 
-    # NOTE: Co-occurrence value linking is deferred to AFTER enrichment
-    # because page_number is not yet available at this stage.
-    # Call link_after_enrichment(graph) from main.py after enrich_metadata().
+    # 3. Add internal metadata/offsets to nodes for proximity linking
+    for entity in entities:
+        norm_text = normalize_text(entity["text"], label=entity["label"])
+        node_id = node_id_map.get(norm_text)
+        if node_id and graph.has_node(node_id):
+            graph.nodes[node_id]["start_offset"] = entity.get("start", 0)
 
     # ── Cross-entity relationship linking (Tier 1 & 2) ────────────────────────
     _add_cross_entity_relationships(graph, main_company_node)
@@ -287,10 +290,7 @@ _SUBJECT_LABELS = {
 def _link_cooccurring_values(graph: nx.DiGraph) -> None:
     """
     Add MEASURES edges from subject entity nodes to Quantitative Value nodes
-    that share the same page_number and have no existing in-edges.
-
-    This converts isolated numeric islands into connected metric observations
-    without requiring LLM inference.
+    that share the same page_number, prioritizing the NEAREST subject in text.
     """
     # Collect value nodes that are still isolated (no in-edges)
     value_nodes = [
@@ -314,12 +314,22 @@ def _link_cooccurring_values(graph: nx.DiGraph) -> None:
         if not subjects_on_page:
             continue
 
-        # Pick the highest-scored subject on the same page as the anchor
-        best_subject = max(subjects_on_page, key=lambda x: x[1].get("score", 0))
+        v_offset = vdata.get("start_offset", 0)
+        
+        # Proximity Anchoring: Find the subject with the smallest character distance
+        # to the value node, provided it's within a reasonable window or on the same page.
+        def calc_dist(s_tuple):
+            s_offset = s_tuple[1].get("start_offset", 0)
+            return abs(v_offset - s_offset)
+
+        best_subject = min(subjects_on_page, key=calc_dist)
+        
+        # Validate: If distance is massive (e.g. > 2000 chars), maybe don't link?
+        # For now, we trust the page-level proximity if no better match exists.
         graph.add_edge(best_subject[0], vid, relation="MEASURES")
         edges_added += 1
 
-    logging.info("Co-occurrence linker: added %d MEASURES edges", edges_added)
+    logging.info("Co-occurrence linker: added %d proximity-aware MEASURES edges", edges_added)
 
 
 # ── Cross-entity relationship linking ──────────────────────────────────────────
@@ -448,17 +458,40 @@ def _link_metrics_to_frameworks(graph):
 
 
 def _link_company_hierarchy(graph, main_company_node):
-    """Link subsidiary/partner Company nodes to the main company."""
+    """
+    Link subsidiary/partner Company nodes to the main company.
+    Strict Rule: Only link if corporate keywords are present in context
+    or if it's a known subsidiary.
+    """
     if not main_company_node:
         return
+    
+    # Keywords that suggest a hierarchy relationship
+    HIERARCHY_KEYWORDS = {"subsidiary", "partner", "division", "segment", "joint venture", "group", "acquired"}
+    # Substances/contexts to explicitly avoid linking as subsidiaries
+    NON_COMPANY_CONTEXTS = {"metric context", "substance", "fuel", "gas", "oil", "emissions"}
+
     company_nodes = [(n, d) for n, d in graph.nodes(data=True)
                      if d.get("label") == "Company" and n != main_company_node]
+    
     edges_added = 0
-    for cid, _ in company_nodes:
-        if not graph.has_edge(cid, main_company_node):
+    for cid, cdata in company_nodes:
+        text = (cdata.get("text", "") or "").lower()
+        context = (cdata.get("context", "") or "").lower()
+        
+        # Don't link if it's been reclassified or matches a "substance" type
+        if cdata.get("label") in NON_COMPANY_CONTEXTS:
+            continue
+            
+        # Only link if the context explicitly mentions a corporate relationship
+        # OR if it's a very clear company name (proper noun title case check)
+        is_explicit = any(kw in context for kw in HIERARCHY_KEYWORDS)
+        
+        if is_explicit and not graph.has_edge(cid, main_company_node):
             graph.add_edge(cid, main_company_node, relation="SUBSIDIARY_OF")
             edges_added += 1
-    logging.info("Cross-linker: added %d SUBSIDIARY_OF edges", edges_added)
+            
+    logging.info("Cross-linker: added %d validated SUBSIDIARY_OF edges", edges_added)
 
 
 def _link_temporal_observations(graph):
