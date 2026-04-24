@@ -1,6 +1,8 @@
 import logging
+import re
 import networkx as nx
 import json
+from difflib import SequenceMatcher
 from .normalization import normalize_text, should_filter_entity, reclassify_entity_label
 
 
@@ -86,6 +88,9 @@ def build_graph(document, entities, relations, taxonomy, topics, quant_qual,
     # NOTE: Co-occurrence value linking is deferred to AFTER enrichment
     # because page_number is not yet available at this stage.
     # Call link_after_enrichment(graph) from main.py after enrich_metadata().
+
+    # ── Cross-entity relationship linking (Tier 1 & 2) ────────────────────────
+    _add_cross_entity_relationships(graph, main_company_node)
 
     logging.info("Graph built: %d nodes, %d edges",
                  graph.number_of_nodes(), graph.number_of_edges())
@@ -255,3 +260,189 @@ def _link_cooccurring_values(graph: nx.DiGraph) -> None:
         edges_added += 1
 
     logging.info("Co-occurrence linker: added %d MEASURES edges", edges_added)
+
+
+# ── Cross-entity relationship linking ──────────────────────────────────────────
+
+_FRAMEWORK_ABBREVS = {
+    re.compile(r'\bgri\b', re.IGNORECASE): "GRI",
+    re.compile(r'\bsasb\b', re.IGNORECASE): "SASB",
+    re.compile(r'\btcfd\b', re.IGNORECASE): "TCFD",
+    re.compile(r'\biso\s*\d+', re.IGNORECASE): "ISO",
+    re.compile(r'\bsdgs?\b', re.IGNORECASE): "SDG",
+    re.compile(r'\besrs\b', re.IGNORECASE): "ESRS",
+}
+
+_ESG_PILLAR_KEYWORDS = {
+    "Environmental": {"climate", "carbon", "emissions", "energy", "water", "waste",
+                      "biodiversity", "environmental", "ghg", "scope", "renewable",
+                      "electricity", "fuel", "natural gas", "pollution", "tco2e"},
+    "Social": {"human rights", "diversity", "inclusion", "employees", "safety",
+               "community", "labor", "social", "workforce", "women", "hiring",
+               "parental", "disability", "donation", "well-being", "health",
+               "proficiency", "turnover", "compensation", "culture"},
+    "Governance": {"board", "ethics", "corruption", "transparency", "governance",
+                   "audit", "compliance", "risk management", "code of conduct",
+                   "whistleblower", "oversight", "integrity"},
+}
+
+
+def _add_cross_entity_relationships(graph, main_company_node):
+    """Add Tier 1 & 2 cross-entity relationships after all nodes are built."""
+    _link_events_to_metrics(graph)
+    _link_targets_to_metrics(graph)
+    _link_metrics_to_frameworks(graph)
+    _link_company_hierarchy(graph, main_company_node)
+    _link_temporal_observations(graph)
+    _add_esg_pillar_nodes(graph)
+
+
+def _fuzzy_score(a, b):
+    """Combined substring + token-overlap + sequence similarity."""
+    al, bl = a.lower().strip(), b.lower().strip()
+    if not al or not bl:
+        return 0.0
+    if al in bl or bl in al:
+        return 0.9
+    sa, sb = set(al.split()), set(bl.split())
+    jaccard = len(sa & sb) / len(sa | sb) if (sa and sb) else 0.0
+    seq = SequenceMatcher(None, al, bl).ratio()
+    return max(jaccard, seq)
+
+
+def _link_events_to_metrics(graph):
+    """Link Event nodes to their related ESG Metric nodes via EVENT_ABOUT."""
+    event_nodes = [(n, d) for n, d in graph.nodes(data=True) if d.get("type") == "event"]
+    metric_nodes = [(n, d) for n, d in graph.nodes(data=True)
+                    if d.get("type") == "metric" or d.get("label") == "ESG Metric"]
+    if not metric_nodes:
+        return
+
+    edges_added = 0
+    for eid, edata in event_nodes:
+        event_metric = edata.get("metric", "")
+        if not event_metric or event_metric.lower() in ("metric", "unknown", ""):
+            continue
+        best_match, best_score = None, 0.0
+        for mid, mdata in metric_nodes:
+            score = _fuzzy_score(event_metric, mdata.get("text", ""))
+            if score > best_score:
+                best_score, best_match = score, mid
+        if best_match and best_score >= 0.35 and not graph.has_edge(eid, best_match):
+            graph.add_edge(eid, best_match, relation="EVENT_ABOUT", score=best_score)
+            edges_added += 1
+
+    logging.info("Cross-linker: added %d EVENT_ABOUT edges", edges_added)
+
+
+def _link_targets_to_metrics(graph):
+    """Link Target nodes to the ESG Metrics they reference via TARGET_FOR."""
+    target_nodes = [(n, d) for n, d in graph.nodes(data=True) if d.get("type") == "target"]
+    metric_nodes = [(n, d) for n, d in graph.nodes(data=True)
+                    if d.get("type") == "metric" or d.get("label") == "ESG Metric"]
+    if not metric_nodes:
+        return
+
+    edges_added = 0
+    for tid, tdata in target_nodes:
+        target_text = tdata.get("target_type", "") or tdata.get("text", "")
+        if not target_text:
+            continue
+        best_match, best_score = None, 0.0
+        for mid, mdata in metric_nodes:
+            score = _fuzzy_score(target_text, mdata.get("text", ""))
+            if score > best_score:
+                best_score, best_match = score, mid
+        if best_match and best_score >= 0.3 and not graph.has_edge(tid, best_match):
+            graph.add_edge(tid, best_match, relation="TARGET_FOR", score=best_score)
+            edges_added += 1
+
+    logging.info("Cross-linker: added %d TARGET_FOR edges", edges_added)
+
+
+def _link_metrics_to_frameworks(graph):
+    """Link ESG Metrics to Sustainability Frameworks via GOVERNED_BY."""
+    # Index framework nodes by abbreviation
+    fw_by_abbrev = {}
+    for n, d in graph.nodes(data=True):
+        if d.get("label") == "Sustainability Framework":
+            text = d.get("text", "")
+            for pattern, abbrev in _FRAMEWORK_ABBREVS.items():
+                if pattern.search(text):
+                    fw_by_abbrev[abbrev] = n
+
+    metric_nodes = [(n, d) for n, d in graph.nodes(data=True)
+                    if d.get("type") == "metric" or d.get("label") == "ESG Metric"]
+
+    edges_added = 0
+    for mid, mdata in metric_nodes:
+        text = (mdata.get("text", "") + " " + (mdata.get("original_text", "") or "")).strip()
+        for pattern, abbrev in _FRAMEWORK_ABBREVS.items():
+            if pattern.search(text):
+                fw_node = fw_by_abbrev.get(abbrev)
+                if fw_node and fw_node != mid and not graph.has_edge(mid, fw_node):
+                    graph.add_edge(mid, fw_node, relation="GOVERNED_BY")
+                    edges_added += 1
+
+    logging.info("Cross-linker: added %d GOVERNED_BY edges", edges_added)
+
+
+def _link_company_hierarchy(graph, main_company_node):
+    """Link subsidiary/partner Company nodes to the main company."""
+    if not main_company_node:
+        return
+    company_nodes = [(n, d) for n, d in graph.nodes(data=True)
+                     if d.get("label") == "Company" and n != main_company_node]
+    edges_added = 0
+    for cid, _ in company_nodes:
+        if not graph.has_edge(cid, main_company_node):
+            graph.add_edge(cid, main_company_node, relation="SUBSIDIARY_OF")
+            edges_added += 1
+    logging.info("Cross-linker: added %d SUBSIDIARY_OF edges", edges_added)
+
+
+def _link_temporal_observations(graph):
+    """Link observations of the same metric across years via YEAR_OVER_YEAR."""
+    metric_obs = {}  # metric_node_id -> [(obs_id, year)]
+    for src, tgt, edata in graph.edges(data=True):
+        if edata.get("relation") == "HAS_OBSERVATION":
+            year = graph.nodes.get(tgt, {}).get("year", "")
+            if year and year != "None":
+                metric_obs.setdefault(src, []).append((tgt, year))
+
+    edges_added = 0
+    for _, obs_list in metric_obs.items():
+        if len(obs_list) < 2:
+            continue
+        obs_list.sort(key=lambda x: x[1])
+        for i in range(len(obs_list) - 1):
+            earlier, later = obs_list[i][0], obs_list[i + 1][0]
+            if not graph.has_edge(earlier, later):
+                graph.add_edge(earlier, later, relation="YEAR_OVER_YEAR")
+                edges_added += 1
+    logging.info("Cross-linker: added %d YEAR_OVER_YEAR edges", edges_added)
+
+
+def _add_esg_pillar_nodes(graph):
+    """Create Environmental/Social/Governance super-nodes and categorize entities."""
+    for pillar in ("Environmental", "Social", "Governance"):
+        pid = f"pillar_{pillar.lower()}"
+        if not graph.has_node(pid):
+            graph.add_node(pid, text=pillar, label="ESG Pillar", type="pillar")
+
+    categorizable = {"ESG Metric", "Sustainability Framework", "Event",
+                     "Target", "MetricObservation"}
+    edges_added = 0
+    for nid, ndata in list(graph.nodes(data=True)):
+        if ndata.get("type") == "pillar" or ndata.get("label") not in categorizable:
+            continue
+        text = (ndata.get("text", "") + " " + (ndata.get("metric", "") or "")
+                + " " + (ndata.get("event_type", "") or "")
+                + " " + (ndata.get("target_type", "") or "")).lower()
+        for pillar, keywords in _ESG_PILLAR_KEYWORDS.items():
+            if any(kw in text for kw in keywords):
+                pid = f"pillar_{pillar.lower()}"
+                if not graph.has_edge(nid, pid):
+                    graph.add_edge(nid, pid, relation="CATEGORIZED_AS")
+                    edges_added += 1
+    logging.info("Cross-linker: added %d CATEGORIZED_AS edges (ESG pillars)", edges_added)

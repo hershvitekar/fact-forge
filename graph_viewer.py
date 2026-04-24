@@ -52,12 +52,40 @@ def view_graph(file_path=None):
     # Configure physics for stability
     net.force_atlas_2based(gravity=-50, central_gravity=0.01, spring_length=100, spring_strength=0.08)
 
-    # Professional Color Map
+    # Professional Color Map — covers all V2 node types
     color_map = {
+        # Core entity types
+        'Company': '#3b82f6',               # blue
+        'Person': '#8b5cf6',                # purple
+        'ESG Metric': '#fbbf24',            # amber
+        'Sustainability Framework': '#a78bfa', # violet
+        'Quantitative Value': '#34d399',    # emerald
+        'Unit of Measure': '#6ee7b7',       # light green
+        'Reporting Year': '#f472b6',        # pink
+        # Structured fact types
+        'MetricObservation': '#fb923c',     # orange
+        'Target': '#f87171',                # red
+        'Event': '#38bdf8',                 # sky blue
+        # New: ESG Pillar super-nodes
+        'ESG Pillar': '#e879f9',            # fuchsia
+        # Reclassified types
+        'Internal Tool': '#94a3b8', 'Internal Program': '#94a3b8',
+        'Partnership': '#2dd4bf', 'Platform': '#a3e635', 'Policy Document': '#cbd5e1',
+        # Legacy keys
         'emission type': '#f87171', 'sustainability initiative': '#4ade80',
         'stakeholder group': '#60a5fa', 'environmental risk': '#fb923c',
         'ESG framework or standard': '#a78bfa', 'ESG metric': '#fbbf24',
-        'Standard': '#a78bfa', 'Requirement': '#f87171', 'Concept': '#60a5fa'
+        'Standard': '#a78bfa', 'Requirement': '#f87171', 'Concept': '#60a5fa',
+    }
+
+    # Edge colors by relationship type
+    edge_color_map = {
+        'REPORTS_METRIC': '#3b82f6', 'HAS_OBSERVATION': '#fb923c',
+        'HAS_EVENT': '#38bdf8', 'HAS_TARGET': '#f87171',
+        'REPORTED_AT': '#f472b6', 'MEASURES': '#34d399',
+        'YEAR_OVER_YEAR': '#e879f9', 'EVENT_ABOUT': '#fbbf24',
+        'TARGET_FOR': '#f87171', 'GOVERNED_BY': '#a78bfa',
+        'SUBSIDIARY_OF': '#60a5fa', 'CATEGORIZED_AS': '#e879f9',
     }
 
     # Add Nodes
@@ -68,16 +96,21 @@ def view_graph(file_path=None):
         
         centrality = data.get('centrality', 0)
         size = 20 + (float(centrality) * 200) if centrality else 25
+
+        # Make pillar nodes larger as category hubs
+        if etype == 'ESG Pillar':
+            size = max(size, 45)
         
         # Tooltip
         context_str = data.get('context', 'No context available')
         title = f"Entity: {label} | Type: {etype}"
         net.add_node(node_id, label=label, title=title, color=color, size=size, context=context_str, etype=etype, score=data.get('score', 0), centrality=float(centrality))
 
-    # Add Edges
+    # Add Edges with relationship-specific colors
     for source, target, data in G.edges(data=True):
         relation = data.get('relation') or data.get('etype') or ''
-        net.add_edge(source, target, label=relation, color='#475569', arrows='to')
+        edge_color = edge_color_map.get(relation, '#475569')
+        net.add_edge(source, target, label=relation, color=edge_color, arrows='to')
 
     # Add some basic options directly
     net.options.edges.smooth.enabled = True
