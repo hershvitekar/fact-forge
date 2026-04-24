@@ -1,10 +1,19 @@
 import logging
 import argparse
 import sys
-import torch
 import json
 from collections import Counter
-# Workaround for Python 3.13 / Torch JIT compatibility issues with DeBERTa models
+import ast
+
+_original_parse = ast.parse
+def _patched_parse(source, *args, **kwargs):
+    try:
+        return _original_parse(source, *args, **kwargs)
+    except IndentationError:
+        return _original_parse("def dummy(): pass", *args, **kwargs)
+ast.parse = _patched_parse
+
+import torch
 torch.jit._state.disable()
 
 from pathlib import Path
@@ -48,8 +57,8 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     )
     source_path = source_path or "input/document.pdf"
     print("\n" + "="*60)
-    print(f"🚀 ESG KNOWLEDGE GRAPH PIPELINE v2.1")
-    print(f"📄 Source: {source_path}")
+    print(f"STARTING ESG KNOWLEDGE GRAPH PIPELINE v2.1")
+    print(f"Source: {source_path}")
     print("="*60 + "\n")
     
     logging.info("[STAGE 1/5] PARSING & DISCOVERY")
@@ -87,10 +96,21 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
         taxonomy = discover_taxonomy(document, prescan)
         logging.info("Classifying ESG thematic coverage...")
         topics = classify_esg_topics(document, models)
+        
+        # Free memory from classification models
+        models.clear('esg_models') 
+        
         quant_qual = extract_quant_qual(document)
         logging.info("[STAGE 2/5] EXTRACTION")
         entities = extract_entities(document, models.gliner, sentences)
+        
+        # Free GLiNER before loading GLiREL to save memory peak
+        models.clear('gliner')
+        
         relations = extract_relations(document, models.glirel, sentences, entities)
+        
+        # Free GLiREL and spaCy as they are no longer needed for the rest of the pipeline
+        models.clear()
 
         if save_intermediates:
             logging.info("Saving intermediate data to %s", cache_path)
