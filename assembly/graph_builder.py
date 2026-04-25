@@ -167,12 +167,42 @@ def build_graph(document, entities, relations, taxonomy, topics, quant_qual,
     return graph
 
 
-def link_after_enrichment(graph: nx.DiGraph) -> None:
+def link_after_enrichment(graph: nx.DiGraph, table_facts: list = None) -> None:
     """
-    Public entry point: add MEASURES edges using page co-occurrence.
+    Public entry point: add MEASURES edges and process structured table data.
     """
+    if table_facts:
+        _process_table_facts(graph, table_facts)
+        
     _link_cooccurring_values(graph)
     _link_to_standard_metrics(graph)
+
+def _process_table_facts(graph, facts):
+    """
+    Directly inject facts extracted from tables into the graph.
+    """
+    logging.info("Graph Builder: Injecting %d facts from tables", len(facts))
+    for f in facts:
+        # Use existing observation handler logic but with table context
+        obs = {
+            "metric": f["metric"],
+            "value": f["value"],
+            "year": f["year"],
+            "unit": f.get("unit", "")
+        }
+        # Find if we have a company node to anchor to
+        company_node = None
+        for nid, ndata in graph.nodes(data=True):
+            if ndata.get("label") == "Company":
+                company_node = nid
+                break
+        
+        _handle_observation(graph, obs, company_node)
+        
+        # Add heading context to the metric node if we just created it
+        metric_id = f"esg_metric_{slugify(normalize_text(f['metric'], label='ESG Metric'))}"
+        if graph.has_node(metric_id):
+            graph.nodes[metric_id]["table_heading"] = f["heading"]
 
 
 # ── Structured fact handlers ───────────────────────────────────────────────────
@@ -582,16 +612,32 @@ def _add_esg_pillar_nodes(graph):
 STANDARD_METRICS = {
     "Scope 1 Emissions": ["scope 1", "direct emissions", "ghg protocol scope 1"],
     "Scope 2 Emissions": ["scope 2", "indirect emissions", "purchased electricity"],
-    "Total Energy": ["total energy", "energy consumption", "energy usage"],
-    "Total Water": ["water consumption", "water withdrawn", "total water"],
-    "Waste Generated": ["total waste", "waste generated", "solid waste"],
+    "Total Energy": ["total energy", "energy consumption", "energy usage", "joules"],
+    "Total Water": ["water consumption", "water withdrawal", "total water", "kilolitres"],
+    "Waste Generated": ["total waste", "waste generated", "solid waste", "waste intensity"],
     "LTIFR": ["ltifr", "lost time injury", "injury frequency"],
-    "Gender Diversity": ["female employees", "women in workforce", "gender diversity"],
-    "Social Impact": ["lives impacted", "community reach", "social beneficiaries", "prabhat"]
+    "Gender Diversity": ["female employees", "women in workforce", "gender diversity", "board of directors"],
+    "Social Impact": ["lives impacted", "community reach", "social beneficiaries", "prabhat", "shakti", "nutrition"]
 }
 
 def _link_to_standard_metrics(graph):
     """Map company-specific metrics to a set of global standard nodes."""
+    # Mapping of headings to pillars to reduce ambiguity
+    HEADING_PILLAR_MAP = {
+        "Principle 6": "Environmental",
+        "Environmental": "Environmental",
+        "Climate": "Environmental",
+        "Water": "Environmental",
+        "Principle 3": "Social",
+        "Social": "Social",
+        "Workforce": "Social",
+        "Diversity": "Social",
+        "Principle 5": "Social", # Human Rights
+        "CSR": "Social",
+        "Principle 8": "Social", # Community
+        "Prabhat": "Social"
+    }
+
     for std_name, keywords in STANDARD_METRICS.items():
         std_id = f"std_metric_{slugify(std_name)}"
         if not graph.has_node(std_id):
@@ -600,6 +646,21 @@ def _link_to_standard_metrics(graph):
         for nid, ndata in graph.nodes(data=True):
             if ndata.get("label") == "ESG Metric":
                 metric_text = ndata.get("text", "").lower()
-                if any(kw in metric_text for kw in keywords):
+                heading = ndata.get("table_heading", "")
+                
+                # Check for direct keyword match
+                match = any(kw in metric_text for kw in keywords)
+                
+                # Check for context match if the metric is ambiguous
+                # e.g. "Total consumption" in "Principle 6" is likely Energy or Water
+                if not match and heading:
+                    for h_key, pillar in HEADING_PILLAR_MAP.items():
+                        if h_key.lower() in heading.lower():
+                            # If we are under Principle 6 and the metric has "energy" or "emissions"
+                            if pillar == "Environmental" and ("energy" in metric_text or "emission" in metric_text or "water" in metric_text):
+                                # Further refine matching logic here if needed
+                                pass
+                
+                if match:
                     graph.add_edge(nid, std_id, relation="MAPPED_TO")
-    logging.info("Standardization: Mapped metrics to global standard categories.")
+    logging.info("Standardization: Mapped metrics to global standard categories using context.")

@@ -130,10 +130,31 @@ def evaluate_graph(graph_path, bank_path="eval_engine/question_bank.json"):
             print(f"  [+] Graph Node Found: '{matched_metric['text']}' (Confidence: {best_score:.2f})")
             
             if matched_metric['values']:
-                for val in matched_metric['values']:
+                # Sort values: prioritize those containing "Total", "(Total)", or matching primary units
+                def rank_val(v):
+                    score = 0
+                    spec = v.get('specific_metric', '').lower()
+                    if "total" in spec: score += 10
+                    if "(" in spec and ")" in spec: score += 5 # Likely a qualified header
+                    if any(u in v['unit'].lower() for u in ['tco', 'gj', 'kilolitres', 'mt']): score += 3
+                    return score
+
+                sorted_vals = sorted(matched_metric['values'], key=rank_val, reverse=True)
+                
+                # Deduplicate and show top answers
+                seen_answers = set()
+                displayed_count = 0
+                for val in sorted_vals:
                     ans = f"{val['value']} {val['unit']}".strip()
+                    if ans in seen_answers: continue
+                    seen_answers.add(ans)
+                    
                     spec = f" (via '{val['specific_metric']}')" if val.get('specific_metric') else ""
                     print(f"      -> Extracted Answer: {ans}{spec}")
+                    displayed_count += 1
+                    if displayed_count >= 5: # Limit noise to top 5 most relevant
+                        break
+                        
                 success_count += 1
             else:
                 print("      -> [-] Node exists but has no linked Quantitative Values.")

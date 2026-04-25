@@ -37,6 +37,7 @@ from assembly.exporter import export_kg
 from enrichment.metadata import enrich_metadata
 from enrichment.algorithms import run_graph_algorithms
 from insight.narrative import generate_narrative
+from extraction.table_parser import get_tables_with_context, extract_esg_facts_from_tables
 import networkx as nx
 
 
@@ -69,6 +70,7 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     report_name = Path(source_path).stem
 
     # --- TABLE PROCESSING INTEGRATION ---
+    original_text = document["text"] # Save raw MD for the structured parser
     if source_path.endswith(".md"):
         json_tables_path = Path(r"Z:\outputs") / f"{report_name}_tables.json"
         logging.info("Attempting to linearize tables from %s", json_tables_path)
@@ -176,7 +178,15 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
         graph.remove_nodes_from(isolated_nodes)
         logging.info("Pruned %d isolated nodes from the graph to reduce noise", len(isolated_nodes))
 
+    # V2: Structured table extraction (Iteration 3)
+    logging.info("[STAGE 4/5] EXTRACTING STRUCTURED TABLE FACTS")
+    # Use original_text to find |---| patterns before they were linearized
+    tables = get_tables_with_context(original_text)
+    table_facts = extract_esg_facts_from_tables(tables)
+    logging.info("Extracted %d structured facts from tables", len(table_facts))
+
     logging.info("[STAGE 4/5] GRAPH ENRICHMENT & ALGORITHMS")
+    link_after_enrichment(graph, table_facts=table_facts)
     graph = run_graph_algorithms(graph)
 
     # 5. Export
