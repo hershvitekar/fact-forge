@@ -40,8 +40,8 @@ from insight.narrative import generate_narrative
 import networkx as nx
 
 
-OUTPUT_DIR = Path(__file__).resolve().parent / "output"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = Path(r"Z:\graphs")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def write_insights(text: str, destination: Path) -> None:
@@ -50,7 +50,7 @@ def write_insights(text: str, destination: Path) -> None:
 
 
 def main(source_path: str = None, skip_llm: bool = False, relation_threshold: float = 0.08, 
-         llm_only: bool = False, save_intermediates: bool = True) -> None:
+         llm_only: bool = False, graph_only: bool = False, save_intermediates: bool = True) -> None:
     logging.basicConfig(
         level=logging.INFO, 
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -70,7 +70,7 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
 
     # --- TABLE PROCESSING INTEGRATION ---
     if source_path.endswith(".md"):
-        json_tables_path = Path(source_path).parent / f"{report_name}_tables.json"
+        json_tables_path = Path(r"Z:\outputs") / f"{report_name}_tables.json"
         logging.info("Attempting to linearize tables from %s", json_tables_path)
         document["text"] = process_document_tables(document["text"], json_tables_path)
         # Update pages text as well since it's used in some modules
@@ -84,7 +84,7 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     
     cache_path = report_out_dir / "intermediates.json"
 
-    if llm_only:
+    if llm_only or graph_only:
         if not cache_path.exists():
             logging.error("Intermediates cache not found at %s. Run a full pipeline with --save-intermediates first.", cache_path)
             return
@@ -146,7 +146,7 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
         logging.info("Global Anchor identified: %s", main_company)
 
     logging.info("[STAGE 3/5] TARGETED LLM DISAMBIGUATION")
-    if skip_llm:
+    if skip_llm or graph_only:
         complex_relations = relations
     else:
         complex_relations = resolve_ambiguities(document, entities, relations, main_company=main_company)
@@ -204,6 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("source_path", nargs="?", default="input/document.pdf", help="Path to the PDF document.")
     parser.add_argument("--skip-llm", action="store_true", help="Skip LLM-based relation extraction and narrative generation.")
     parser.add_argument("--llm-only", action="store_true", help="Skip extraction and only run LLM steps using cached intermediates.")
+    parser.add_argument("--graph-only", action="store_true", help="Skip NLP models and LLM calls, quickly rebuilding the graph from cache.")
     parser.add_argument("--no-cache", action="store_false", dest="save_intermediates", help="Do not save intermediate extraction results to cache.")
     parser.set_defaults(save_intermediates=True)
     parser.add_argument("--relation-threshold", type=float, default=0.08, help="Minimum confidence score for relationships (0.0 to 1.0).")
@@ -213,4 +214,5 @@ if __name__ == "__main__":
          skip_llm=args.skip_llm, 
          relation_threshold=args.relation_threshold,
          llm_only=args.llm_only,
-         save_intermediates=args.save_intermediates)
+         graph_only=args.graph_only,
+         save_intermediates=args.save_intermediates)
