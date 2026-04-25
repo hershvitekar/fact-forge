@@ -7,7 +7,11 @@ import argparse
 
 def load_question_bank(bank_path="eval_engine/question_bank.json"):
     with open(bank_path, 'r', encoding='utf-8') as f:
-        return json.load(f)
+        data = json.load(f)
+        # Handle the new "Global" format which wraps questions in a "questions" key
+        if isinstance(data, dict) and "questions" in data:
+            return data["questions"]
+        return data
 
 def extract_metrics_from_graph(graph):
     """Extract all Standard and Specific ESG Metric nodes and their associated values/units."""
@@ -168,6 +172,7 @@ def evaluate_graph(graph_path, bank_path="eval_engine/question_bank.json"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a graph against standard ESG questions.")
     parser.add_argument("graph_path", help="Path to the graphml file")
+    parser.add_argument("--bank", default="eval_engine/question_bank.json", help="Path to the question bank JSON file")
     args = parser.parse_args()
     
-    evaluate_graph(args.graph_path)
+    evaluate_graph(args.graph_path, bank_path=args.bank)
