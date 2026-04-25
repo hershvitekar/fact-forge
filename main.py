@@ -179,20 +179,23 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     logging.info("[STAGE 4/5] GRAPH ENRICHMENT & ALGORITHMS")
     graph = run_graph_algorithms(graph)
 
-    logging.info("[STAGE 5/5] INSIGHT GENERATION & EXPORT")
-    # Both paths use generate_narrative — skip_llm forces the structured fallback
-    # inside narrative.py (LLM query is skipped when LLM is unavailable anyway).
-    # This ensures entity-level data always appears in insights.md.
-    narrative = generate_narrative(graph, topics, quant_qual, document, output_dir=report_out_dir)
-
     # 5. Export
     graph_path = report_out_dir / "graph.graphml"
     insights_path = report_out_dir / "insights.md"
     logging.info("Exporting graph to %s", graph_path)
     nx.write_graphml(graph, str(graph_path))
 
-    logging.info("Exporting insights to %s", insights_path)
-    write_insights(narrative, insights_path)
+    logging.info("[STAGE 5/5] INSIGHT GENERATION & EXPORT")
+    if not graph_only:
+        # Both paths use generate_narrative — skip_llm forces the structured fallback
+        # inside narrative.py (LLM query is skipped when LLM is unavailable anyway).
+        # This ensures entity-level data always appears in insights.md.
+        narrative = generate_narrative(graph, topics, quant_qual, document, output_dir=report_out_dir)
+
+        logging.info("Exporting insights to %s", insights_path)
+        write_insights(narrative, insights_path)
+    else:
+        logging.info("Skipping insight generation (LLM calls) in graph-only mode.")
 
     # V2: Export structured data
     export_kg(graph, report_out_dir)
