@@ -5,7 +5,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import argparse
 
-def load_question_bank(bank_path="eval_engine/question_bank.json"):
+def load_question_bank(bank_path="eval_engine/global_question_bank.json"):
     with open(bank_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
         # Handle the new "Global" format which wraps questions in a "questions" key
@@ -172,7 +172,7 @@ def evaluate_graph(graph_path, bank_path="eval_engine/question_bank.json"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate a graph against standard ESG questions.")
     parser.add_argument("graph_path", help="Path to the graphml file")
-    parser.add_argument("--bank", default="eval_engine/question_bank.json", help="Path to the question bank JSON file")
+    parser.add_argument("--bank", default="eval_engine/global_question_bank.json", help="Path to the question bank JSON file")
     args = parser.parse_args()
     
     evaluate_graph(args.graph_path, bank_path=args.bank)

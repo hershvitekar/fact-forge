@@ -160,6 +160,7 @@ output/
 *.csv
 *.json
 !metadata.json # Keep metadata if any
+!eval_engine/*.json # Keep question banks
 
 # macOS
 .DS_Store

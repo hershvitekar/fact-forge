@@ -1,0 +1,127 @@
+{
+    "market_standards": {
+        "India": "SEBI BRSR",
+        "EU": "CSRD / ESRS",
+        "USA": "SEC Climate Disclosure",
+        "Global": "ISSB / IFRS S1 & S2"
+    },
+    "questions": [
+        {
+            "id": "ENV_GHG_S1",
+            "standard_question": "What are the total Scope 1 GHG emissions?",
+            "category": "Environmental",
+            "topic": "Greenhouse Gas Emissions",
+            "keywords": ["scope 1", "direct emissions", "ghg protocol scope 1", "carbon footprint scope 1", "tco2e"],
+            "regulation": ["BRSR", "SEC", "ESRS E1"],
+            "typical_units": ["metric tonnes", "mtco2e", "tco2e"]
+        },
+        {
+            "id": "ENV_GHG_S2",
+            "standard_question": "What are the total Scope 2 GHG emissions?",
+            "category": "Environmental",
+            "topic": "Greenhouse Gas Emissions",
+            "keywords": ["scope 2", "indirect emissions", "purchased electricity", "ghg protocol scope 2", "carbon footprint scope 2"],
+            "regulation": ["BRSR", "SEC", "ESRS E1"],
+            "typical_units": ["metric tonnes", "mtco2e", "tco2e"]
+        },
+        {
+            "id": "ENV_GHG_S3",
+            "standard_question": "What are the Scope 3 emissions (Categories 1-15)?",
+            "category": "Environmental",
+            "topic": "Greenhouse Gas Emissions",
+            "keywords": ["scope 3", "value chain emissions", "upstream", "downstream", "indirect ghg"],
+            "regulation": ["ESRS E1", "SEC (Proposed)", "BRSR (Leadership)"],
+            "typical_units": ["metric tonnes", "mtco2e", "tco2e"]
+        },
+        {
+            "id": "ENV_ENERGY_TOTAL",
+            "standard_question": "What is the total energy consumed?",
+            "category": "Environmental",
+            "topic": "Energy Management",
+            "keywords": ["energy consumption", "total energy", "energy usage", "power consumed", "gj", "mwh"],
+            "regulation": ["BRSR", "ESRS E1"],
+            "typical_units": ["gj", "mwh", "joules"]
+        },
+        {
+            "id": "ENV_ENERGY_RENEWABLE",
+            "standard_question": "What is the percentage of renewable energy in the total energy mix?",
+            "category": "Environmental",
+            "topic": "Energy Management",
+            "keywords": ["renewable energy", "solar", "wind", "energy mix", "biomass", "%"],
+            "regulation": ["ESRS E1", "BRSR"],
+            "typical_units": ["%"]
+        },
+        {
+            "id": "ENV_WATER_TOTAL",
+            "standard_question": "What is the total water withdrawn or consumed?",
+            "category": "Environmental",
+            "topic": "Water Management",
+            "keywords": ["water consumption", "water withdrawn", "total water", "water usage", "kiloliters"],
+            "regulation": ["BRSR", "ESRS E3"],
+            "typical_units": ["cubic meters", "megaliters", "kiloliters"]
+        },
+        {
+            "id": "ENV_WATER_STRESS",
+            "standard_question": "What volume of water is withdrawn from water-stressed areas?",
+            "category": "Environmental",
+            "topic": "Water Management",
+            "keywords": ["water stress", "stressed areas", "withdrawal", "scarcity", "baseline water stress"],
+            "regulation": ["ESRS E3", "BRSR"],
+            "typical_units": ["kiloliters", "%"]
+        },
+        {
+            "id": "ENV_WASTE_TOTAL",
+            "standard_question": "What is the total weight of waste generated?",
+            "category": "Environmental",
+            "topic": "Waste Management",
+            "keywords": ["total waste", "waste generated", "solid waste", "hazardous waste", "metric tonnes"],
+            "regulation": ["BRSR", "ESRS E5"],
+            "typical_units": ["metric tonnes", "tons", "mt"]
+        },
+        {
+            "id": "SOC_LTIFR",
+            "standard_question": "What is the Lost Time Injury Frequency Rate (LTIFR)?",
+            "category": "Social",
+            "topic": "Employee Health & Safety",
+            "keywords": ["ltifr", "lost time injury", "injury rate", "safety frequency", "per million hours"],
+            "regulation": ["BRSR", "ESRS S1"],
+            "typical_units": ["rate", "per million hours", "percentage"]
+        },
+        {
+            "id": "SOC_DIVERSITY_FEMALE",
+            "standard_question": "What is the percentage of female employees in the workforce?",
+            "category": "Social",
+            "topic": "Diversity & Inclusion",
+            "keywords": ["female employees", "women in workforce", "gender diversity", "female representation", "gender ratio"],
+            "regulation": ["BRSR", "ESRS S1"],
+            "typical_units": ["%", "percent"]
+        },
+        {
+            "id": "SOC_GENDER_PAY",
+            "standard_question": "What is the gender pay gap (%) across the organization?",
+            "category": "Social",
+            "topic": "Diversity & Inclusion",
+            "keywords": ["gender pay gap", "remuneration ratio", "pay parity", "wage gap"],
+            "regulation": ["ESRS S1", "BRSR"],
+            "typical_units": ["%", "ratio"]
+        },
+        {
+            "id": "SOC_COMMUNITY_IMPACT",
+            "standard_question": "How many individuals or communities were impacted by social programs?",
+            "category": "Social",
+            "topic": "Community Impact",
+            "keywords": ["lives impacted", "community reach", "social beneficiaries", "community programs", "social impact"],
+            "regulation": ["BRSR", "ESRS S4"],
+            "typical_units": ["people", "lives", "individuals"]
+        },
+        {
+            "id": "GOV_BOARD_IND",
+            "standard_question": "What percentage of the Board of Directors are Independent Directors?",
+            "category": "Governance",
+            "topic": "Board Composition",
+            "keywords": ["independent directors", "board composition", "non-executive directors", "board independence"],
+            "regulation": ["SEC", "BRSR", "ESRS G1"],
+            "typical_units": ["%"]
+        }
+    ]
+}
