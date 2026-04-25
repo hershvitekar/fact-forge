@@ -74,51 +74,40 @@ def export_quality_report(graph: nx.DiGraph, output_dir: Path) -> dict:
 
 def export_kg(graph: nx.DiGraph, output_dir) -> None:
     """
-    Export the knowledge graph into multiple formats:
-      - observations.json   (MetricObservation nodes)
-      - observations.csv    (same, as DataFrame)
-      - nodes.csv           (all nodes)
-      - edges.csv           (all edges)
-      - graph_quality.json  (Task 8: health metrics + grade)
+    Export the knowledge graph into Kùzu-compatible schema-separated formats:
+      - nodes_{Label}.csv
+      - edges_{Relation}.csv
+      - graph_quality.json
     """
-    logging.info("Exporting KG to structured formats")
+    logging.info("Exporting KG to Kùzu-compatible separated schema CSVs")
     output_path = Path(output_dir)
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
-    # ── 1. Observations ────────────────────────────────────────────────────────
-    observations = []
+    # 1. Group nodes by Label
+    nodes_by_label = {}
     for n, d in graph.nodes(data=True):
-        if d.get("type") == "observation":
-            observations.append(d)
+        label = d.get("label", "Unknown").replace(" ", "_")
+        nodes_by_label.setdefault(label, []).append({"id": n, **d})
 
-    with open(output_path / "observations.json", "w", encoding="utf-8") as f:
-        json.dump(observations, f, indent=2)
-
-    if observations:
-        pd.DataFrame(observations).to_csv(
-            output_path / "observations.csv", index=False
-        )
-        logging.info("Exported %d observations to CSV", len(observations))
-    else:
-        logging.warning("No observations found — observations.csv will be empty")
-        # Write header-only CSV so downstream tools don't break
-        pd.DataFrame(columns=["text", "label", "value", "year", "unit", "type", "centrality"]).to_csv(
-            output_path / "observations.csv", index=False
-        )
-
-    # ── 2. All Nodes ──────────────────────────────────────────────────────────
-    nodes = []
-    for n, d in graph.nodes(data=True):
-        nodes.append({"id": n, **d})
-    pd.DataFrame(nodes).to_csv(output_path / "nodes.csv", index=False)
-    logging.info("Exported %d nodes to nodes.csv", len(nodes))
-
-    # ── 3. All Edges ──────────────────────────────────────────────────────────
-    edges = []
+    # 2. Group edges by Relation
+    edges_by_relation = {}
     for u, v, d in graph.edges(data=True):
-        edges.append({"source": u, "target": v, **d})
-    pd.DataFrame(edges).to_csv(output_path / "edges.csv", index=False)
-    logging.info("Exported %d edges to edges.csv", len(edges))
+        rel = d.get("relation", "UNKNOWN_RELATION").replace(" ", "_")
+        edges_by_relation.setdefault(rel, []).append({"source": u, "target": v, **d})
 
-    # ── 4. Task 8: Quality Report ─────────────────────────────────────────────
+    # Export Nodes
+    for label, nodes in nodes_by_label.items():
+        df = pd.DataFrame(nodes)
+        csv_path = output_path / f"nodes_{label}.csv"
+        df.to_csv(csv_path, index=False)
+        logging.info("Exported %d %s nodes", len(nodes), label)
+
+    # Export Edges
+    for rel, edges in edges_by_relation.items():
+        df = pd.DataFrame(edges)
+        csv_path = output_path / f"edges_{rel}.csv"
+        df.to_csv(csv_path, index=False)
+        logging.info("Exported %d %s edges", len(edges), rel)
+
+    # 3. Quality Report
     export_quality_report(graph, output_path)

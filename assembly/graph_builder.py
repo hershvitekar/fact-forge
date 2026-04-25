@@ -5,6 +5,13 @@ import json
 from difflib import SequenceMatcher
 from .normalization import normalize_text, should_filter_entity, reclassify_entity_label
 
+def slugify(text):
+    if not text:
+        return "unknown"
+    text = str(text).lower()
+    text = re.sub(r'[^a-z0-9]+', '_', text)
+    return text.strip('_')
+
 # ── Navigational Noise Pruning (Task 12) ──────────────────────────────
 NAVIGATIONAL_KEYWORDS = [
     r"\bletter\b", r"\bleadership\b", r"\bprogress\b", r"\bplan\b", r"\bapproach\b",
@@ -106,7 +113,7 @@ def build_graph(document, entities, relations, taxonomy, topics, quant_qual,
         # ── Task 7: reclassify misidentified entity types ──────────────────────
         label = reclassify_entity_label(text, raw_label)
 
-        node_id = f"node_{i}"
+        node_id = f"{slugify(label)}_{slugify(norm_text)}"
         node_id_map[norm_text] = node_id
 
         attrs = dict(
@@ -115,13 +122,13 @@ def build_graph(document, entities, relations, taxonomy, topics, quant_qual,
             label=label,
             score=entity["score"],
             type="entity",
-            centrality=entity.get("centrality", 0.0),
+            centrality=entity.get("centrality", 0.0) or 0.0,
         )
-        # Preserve page/context if present
+        # Preserve page/context if present (ensure no None values)
         if entity.get("page_number") is not None:
             attrs["page_number"] = entity["page_number"]
-        if entity.get("context"):
-            attrs["context"] = entity["context"]
+        
+        attrs["context"] = entity.get("context") or ""
 
         graph.add_node(node_id, **attrs)
 
@@ -163,88 +170,120 @@ def build_graph(document, entities, relations, taxonomy, topics, quant_qual,
 def link_after_enrichment(graph: nx.DiGraph) -> None:
     """
     Public entry point: add MEASURES edges using page co-occurrence.
-
-    Must be called AFTER enrichment/metadata.py has populated page_number
-    on entity nodes. Calling it earlier would find zero page numbers and
-    silently produce no edges.
     """
     _link_cooccurring_values(graph)
+    _link_to_standard_metrics(graph)
 
 
 # ── Structured fact handlers ───────────────────────────────────────────────────
 
 def _handle_observation(graph, obs, company_node):
-    """Create structured nodes for a MetricObservation."""
+    """
+    Create structured nodes and edges for a MetricObservation.
+    Structure: Metric -MEASURES-> Quantitative Value -reported_at-> Reporting Year
+    """
     metric_name = normalize_text(obs.get("metric", "Unknown Metric"), label="ESG Metric")
-    value       = str(obs.get("value", ""))
-    year_raw    = obs.get("year")
-    year        = str(year_raw).strip() if year_raw is not None else ""
+    raw_val     = str(obs.get("value", ""))
+    unit_name   = normalize_text(obs.get("unit", ""), label="Unit of Measure")
+    year        = str(obs.get("year", "")).strip()
     if year.lower() == "none": year = ""
-    unit        = normalize_text(obs.get("unit", ""), label="Unit of Measure")
 
-    metric_id = f"met_{metric_name}".replace(" ", "_").lower()
-
+    metric_id = f"esg_metric_{slugify(metric_name)}"
     if not graph.has_node(metric_id):
         graph.add_node(metric_id, text=metric_name, label="ESG Metric", type="metric")
 
     if company_node:
         graph.add_edge(company_node, metric_id, relation="REPORTS_METRIC")
 
+    # Create a unique ID for this specific observation value
+    val_id = f"val_{slugify(metric_name)}_{slugify(raw_val)}_{slugify(year)}"
+    
+    val_attrs = {
+        "text": raw_val,
+        "label": "Quantitative Value",
+        "type": "value",
+        "raw_value": raw_val
+    }
+    try:
+        val_attrs["value_float"] = float(raw_val)
+    except:
+        pass
+
+    graph.add_node(val_id, **val_attrs)
+    
+    # Link Metric to Value
+    graph.add_edge(metric_id, val_id, relation="MEASURES")
+
+    # Link Value to Unit
+    if unit_name:
+        unit_id = f"unit_{slugify(unit_name)}"
+        if not graph.has_node(unit_id):
+            graph.add_node(unit_id, text=unit_name, label="Unit of Measure", type="unit")
+        graph.add_edge(val_id, unit_id, relation="has_unit")
+
+    # Link Value to Year
     if year:
-        year_id = f"year_{year}"
+        year_id = f"reporting_year_{slugify(year)}"
         if not graph.has_node(year_id):
             graph.add_node(year_id, text=year, label="Reporting Year", type="time")
-        graph.add_edge(metric_id, year_id, relation="HAS_VALUE", value=value, unit=unit)
-    else:
-        year_id = "year_unknown"
-        if not graph.has_node(year_id):
-            graph.add_node(year_id, text="Unknown Year", label="Reporting Year", type="time")
-        graph.add_edge(metric_id, year_id, relation="HAS_VALUE", value=value, unit=unit)
+        graph.add_edge(val_id, year_id, relation="reported_at")
 
 
 def _handle_target(graph, target, company_node):
-    """Create structured nodes for a Target."""
+    """Create structured nodes and edges for a Target."""
     target_type = target.get("target_type", "General Target")
     year_raw    = target.get("target_year")
     year        = str(year_raw).strip() if year_raw is not None else ""
     if year.lower() == "none": year = ""
+    context     = target.get("context", "")
 
-    target_id = f"target_{target_type}_{year}".replace(" ", "_").lower()
-    graph.add_node(target_id,
-                   text=f"{target_type} ({year})",
-                   label="Target",
-                   target_type=target_type, year=year,
-                   type="target")
+    target_id = f"target_{slugify(target_type)}_{slugify(year)}"
+    if not graph.has_node(target_id):
+        graph.add_node(target_id,
+                       text=f"{target_type} ({year})",
+                       label="Target",
+                       target_type=target_type, year=year,
+                       type="target")
 
     if company_node:
-        graph.add_edge(company_node, target_id, relation="HAS_TARGET")
+        graph.add_edge(company_node, target_id, relation="HAS_TARGET", context=context)
 
 
 def _handle_event(graph, event, company_node):
-    """Create structured nodes for an Event."""
-    event_type = event.get("event_type", "General Event")
-    metric     = event.get("metric", "")
-    value      = event.get("value", "")
+    """Create a rich edge for an Event, linking Company directly to Metric."""
+    if not company_node:
+        return
+        
+    event_type = event.get("event_type", "OBSERVATION").upper().replace(" ", "_")
+    metric_name = normalize_text(event.get("metric", "Unknown Metric"), label="ESG Metric")
+    
+    raw_val    = str(event.get("value", ""))
+    try:
+        val_float = float(raw_val)
+    except ValueError:
+        val_float = None
+        
     unit       = event.get("unit", "")
     year_raw   = event.get("year")
     year       = str(year_raw).strip() if year_raw is not None else ""
     if year.lower() == "none": year = ""
+    context    = event.get("context", "")
 
-    display_text = f"{metric} {event_type}: {value} {unit}".strip() if metric else f"{event_type}: {value} {unit}".strip()
-    event_id     = f"event_{event_type}_{metric}_{year}".replace(" ", "_").lower()
+    metric_id = f"esg_metric_{slugify(metric_name)}"
+    if not graph.has_node(metric_id):
+        graph.add_node(metric_id, text=metric_name, label="ESG Metric", type="metric")
 
-    graph.add_node(event_id,
-                   text=display_text,
-                   label="Event",
-                   event_type=event_type,
-                   metric=metric,
-                   value=value,
-                   unit=unit,
-                   year=year,
-                   type="event")
+    edge_attrs = {
+        "relation": event_type,
+        "raw_value": raw_val,
+        "unit": unit,
+        "year": year,
+        "context": context or ""
+    }
+    if val_float is not None:
+        edge_attrs["value_float"] = val_float
 
-    if company_node:
-        graph.add_edge(company_node, event_id, relation="HAS_EVENT")
+    graph.add_edge(company_node, metric_id, **edge_attrs)
 
 
 def _handle_simple_relation(graph, rel, node_id_map, threshold):
@@ -523,7 +562,7 @@ def _add_esg_pillar_nodes(graph):
             graph.add_node(pid, text=pillar, label="ESG Pillar", type="pillar")
 
     categorizable = {"ESG Metric", "Sustainability Framework", "Event",
-                     "Target", "MetricObservation"}
+                     "Target", "MetricObservation", "Internal Program"}
     edges_added = 0
     for nid, ndata in list(graph.nodes(data=True)):
         if ndata.get("type") == "pillar" or ndata.get("label") not in categorizable:
@@ -538,3 +577,29 @@ def _add_esg_pillar_nodes(graph):
                     graph.add_edge(nid, pid, relation="CATEGORIZED_AS")
                     edges_added += 1
     logging.info("Cross-linker: added %d CATEGORIZED_AS edges (ESG pillars)", edges_added)
+
+
+STANDARD_METRICS = {
+    "Scope 1 Emissions": ["scope 1", "direct emissions", "ghg protocol scope 1"],
+    "Scope 2 Emissions": ["scope 2", "indirect emissions", "purchased electricity"],
+    "Total Energy": ["total energy", "energy consumption", "energy usage"],
+    "Total Water": ["water consumption", "water withdrawn", "total water"],
+    "Waste Generated": ["total waste", "waste generated", "solid waste"],
+    "LTIFR": ["ltifr", "lost time injury", "injury frequency"],
+    "Gender Diversity": ["female employees", "women in workforce", "gender diversity"],
+    "Social Impact": ["lives impacted", "community reach", "social beneficiaries", "prabhat"]
+}
+
+def _link_to_standard_metrics(graph):
+    """Map company-specific metrics to a set of global standard nodes."""
+    for std_name, keywords in STANDARD_METRICS.items():
+        std_id = f"std_metric_{slugify(std_name)}"
+        if not graph.has_node(std_id):
+            graph.add_node(std_id, text=std_name, label="Standard ESG Metric", type="standard_metric")
+        
+        for nid, ndata in graph.nodes(data=True):
+            if ndata.get("label") == "ESG Metric":
+                metric_text = ndata.get("text", "").lower()
+                if any(kw in metric_text for kw in keywords):
+                    graph.add_edge(nid, std_id, relation="MAPPED_TO")
+    logging.info("Standardization: Mapped metrics to global standard categories.")
