@@ -57,7 +57,7 @@ def process_document_tables(markdown_text, json_tables_path):
     return cleaned_text
 
 def linearize_grid(grid):
-    """Converts a table grid into a list of natural language sentences."""
+    """Converts a table grid into a list of explicitly structured natural language sentences for NLP."""
     if not grid:
         return []
 
@@ -78,7 +78,7 @@ def linearize_grid(grid):
             key = row[0].get("text", "").strip()
             val = row[1].get("text", "").strip()
             if key and val:
-                facts.append(f"{key} is {val}.")
+                facts.append(f"Metric: {key}, Value: {val}")
         return facts
 
     # General grid linearization
@@ -100,9 +100,9 @@ def linearize_grid(grid):
             else:
                 col_name = col_headers[c_idx] if c_idx < len(col_headers) else f"Column {c_idx}"
                 if row_header:
-                    facts.append(f"For {row_header}, the {col_name} is {text}.")
+                    facts.append(f"Metric: {row_header}, Year/Context: {col_name}, Value: {text}")
                 else:
-                    facts.append(f"The {col_name} is {text}.")
+                    facts.append(f"Year/Context: {col_name}, Value: {text}")
                     
     return facts
 

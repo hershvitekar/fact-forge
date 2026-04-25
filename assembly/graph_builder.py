@@ -182,25 +182,24 @@ def _handle_observation(graph, obs, company_node):
     if year.lower() == "none": year = ""
     unit        = normalize_text(obs.get("unit", ""), label="Unit of Measure")
 
-    obs_id    = f"obs_{metric_name}_{year}".replace(" ", "_").lower()
     metric_id = f"met_{metric_name}".replace(" ", "_").lower()
 
-    graph.add_node(metric_id, text=metric_name, label="ESG Metric", type="metric")
-    graph.add_node(obs_id,
-                   text=f"{value} {unit}".strip(),
-                   label="MetricObservation",
-                   value=value, year=year, unit=unit,
-                   type="observation")
-
-    graph.add_edge(metric_id, obs_id, relation="HAS_OBSERVATION")
+    if not graph.has_node(metric_id):
+        graph.add_node(metric_id, text=metric_name, label="ESG Metric", type="metric")
 
     if company_node:
         graph.add_edge(company_node, metric_id, relation="REPORTS_METRIC")
 
     if year:
         year_id = f"year_{year}"
-        graph.add_node(year_id, text=year, label="Reporting Year", type="time")
-        graph.add_edge(obs_id, year_id, relation="REPORTED_AT")
+        if not graph.has_node(year_id):
+            graph.add_node(year_id, text=year, label="Reporting Year", type="time")
+        graph.add_edge(metric_id, year_id, relation="HAS_VALUE", value=value, unit=unit)
+    else:
+        year_id = "year_unknown"
+        if not graph.has_node(year_id):
+            graph.add_node(year_id, text="Unknown Year", label="Reporting Year", type="time")
+        graph.add_edge(metric_id, year_id, relation="HAS_VALUE", value=value, unit=unit)
 
 
 def _handle_target(graph, target, company_node):
