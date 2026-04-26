@@ -119,7 +119,7 @@
             "standard_question": "What percentage of the Board of Directors are Independent Directors?",
             "category": "Governance",
             "topic": "Board Composition",
-            "keywords": ["independent directors", "board composition", "non-executive directors", "board independence"],
+            "keywords": ["independent directors", "board composition", "non-executive directors", "board independence", "board of directors", "independent"],
             "regulation": ["SEC", "BRSR", "ESRS G1"],
             "typical_units": ["%"]
         }

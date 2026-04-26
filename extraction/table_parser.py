@@ -96,6 +96,12 @@ def extract_esg_facts_from_tables(tables):
                         qualifier = sub_headers.get(col_idx, "")
                         full_metric = f"{base_metric} ({qualifier})" if qualifier else base_metric
                         
+                        # CONTEXT-AWARE NAMING: Prepend heading if metric is generic (Task 12)
+                        GENERIC_NAMES = {"total", "male", "female", "category", "parameter", "value", "metric"}
+                        is_generic = base_metric.lower().strip() in GENERIC_NAMES
+                        if is_generic and heading and heading != "Unknown":
+                            full_metric = f"{heading} - {full_metric}"
+                        
                         # Data Cleaning
                         clean_val = raw_val.replace(",", "").replace("%", "").strip()
                         if "Net:" in clean_val:

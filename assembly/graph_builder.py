@@ -2,6 +2,9 @@ import logging
 import re
 import networkx as nx
 import json
+import numpy as np
+from pathlib import Path
+from sklearn.metrics.pairwise import cosine_similarity
 from difflib import SequenceMatcher
 from .normalization import normalize_text, should_filter_entity, reclassify_entity_label
 
@@ -167,29 +170,71 @@ def build_graph(document, entities, relations, taxonomy, topics, quant_qual,
     return graph
 
 
-def link_after_enrichment(graph: nx.DiGraph, table_facts: list = None) -> None:
+def link_after_enrichment(graph: nx.DiGraph, table_facts: list = None, regulatory_map: dict = None, models = None) -> None:
     """
     Public entry point: add MEASURES edges and process structured table data.
+    Now supports regulatory_map for ESGBert-driven anchoring.
     """
     if table_facts:
-        _process_table_facts(graph, table_facts)
+        _process_table_facts(graph, table_facts, regulatory_map)
         
+    # Pre-create standard nodes from the global question bank
+    _create_standard_nodes(graph, regulatory_map)
+    
     _link_cooccurring_values(graph)
     _link_to_standard_metrics(graph)
+    
+    # Final semantic pass using embeddings if available
+    if models and models.embedder:
+        _semantic_mapping_pass(graph, models)
 
-def _process_table_facts(graph, facts):
+def _create_standard_nodes(graph, regulatory_map):
+    """
+    Pre-creates nodes for each regulatory indicator in the global bank.
+    Ensures that standard nodes exist even if not discovered in the current document.
+    """
+    bank_path = Path("eval_engine/global_question_bank.json")
+    if not bank_path.exists():
+        logging.warning("Global question bank missing - skipping standard node creation")
+        return
+    
+    with open(bank_path, 'r', encoding='utf-8') as f:
+        bank_data = json.load(f)
+        questions = bank_data.get("questions", [])
+
+    for q_data in questions:
+        q_id = q_data["id"]
+        # Standard ID format used by the evaluator
+        std_node_id = f"std_metric_{slugify(q_id)}"
+        
+        if not graph.has_node(std_node_id):
+            graph.add_node(std_node_id, 
+                           text=q_data["standard_question"], 
+                           label="Standard ESG Metric",
+                           topic=q_data.get("topic"),
+                           category=q_data.get("category"),
+                           id_code=q_id,
+                           type="standard")
+            logging.debug("Created standard node: %s", std_node_id)
+
+def _process_table_facts(graph, facts, regulatory_map=None):
     """
     Directly inject facts extracted from tables into the graph.
+    Improved Logic: Uses 'Header-Aware Anchoring' to prevent collisions on the same page.
     """
     logging.info("Graph Builder: Injecting %d facts from tables", len(facts))
     for f in facts:
-        # Use existing observation handler logic but with table context
+        metric_name = f["metric"]
+        page = f.get("page", 0)
+        table_heading = f.get("heading", "")
+        
         obs = {
-            "metric": f["metric"],
+            "metric": metric_name,
             "value": f["value"],
             "year": f["year"],
             "unit": f.get("unit", "")
         }
+        
         # Find if we have a company node to anchor to
         company_node = None
         for nid, ndata in graph.nodes(data=True):
@@ -197,22 +242,121 @@ def _process_table_facts(graph, facts):
                 company_node = nid
                 break
         
-        _handle_observation(graph, obs, company_node)
+        # Create a context-aware name to prevent collisions (Task 12)
+        contextual_name = f"{table_heading} {metric_name}" if table_heading else metric_name
         
-        # Add heading context to the metric node if we just created it
-        metric_id = f"esg_metric_{slugify(normalize_text(f['metric'], label='ESG Metric'))}"
-        if graph.has_node(metric_id):
-            graph.nodes[metric_id]["table_heading"] = f["heading"]
+        # Use the contextual name for structured handling
+        _handle_observation(graph, obs, company_node, contextual_name=contextual_name)
+        
+        # Determine the metric_id (must match what _handle_observation generated)
+        metric_id = f"esg_metric_{slugify(normalize_text(contextual_name, label='ESG Metric'))}"
+        
+        if not graph.has_node(metric_id):
+            graph.add_node(metric_id, text=metric_name, label="ESG Metric", type="metric")
+            
+        if company_node:
+            graph.add_edge(company_node, metric_id, relation="REPORTS_METRIC")
+
+        # Add heading context and page info to the metric node
+        graph.nodes[metric_id]["table_heading"] = table_heading
+        graph.nodes[metric_id]["page_number"] = page
+
+        # ── Precision Anchoring ──────────────────────────────────────────────
+        if regulatory_map:
+            # 1. First, check how many standards are active on this specific page
+            page_standards = []
+            for q_id, anchors in regulatory_map.items():
+                if any(a["page"] == page for a in anchors):
+                    page_standards.append(q_id)
+            
+            # 2. Heuristic: If only ONE standard is on this page, link it directly (Safe Fallback)
+            if len(page_standards) == 1:
+                std_node_id = f"std_metric_{slugify(page_standards[0])}"
+                if graph.has_node(std_node_id):
+                    graph.add_edge(metric_id, std_node_id, 
+                                   relation="MAPPED_TO", 
+                                   confidence=0.85, 
+                                   method="single_anchor_fallback")
+            
+            # 3. Precision: If multiple standards, use Header + Keyword Matching
+            elif len(page_standards) > 1:
+                # Load keywords for disambiguation
+                bank_path = Path("eval_engine/global_question_bank.json")
+                questions = {}
+                if bank_path.exists():
+                    with open(bank_path, 'r', encoding='utf-8') as f:
+                        bank = json.load(f)
+                        questions = {q["id"]: q for q in bank.get("questions", [])}
+                
+                for q_id in page_standards:
+                    std_node_id = f"std_metric_{slugify(q_id)}"
+                    if not graph.has_node(std_node_id):
+                        continue
+                    
+                    q_data = questions.get(q_id, {})
+                    keywords = q_data.get("keywords", [])
+                    
+                    # Check the anchors for this specific standard on this page
+                    anchors = regulatory_map[q_id]
+                    for anchor in anchors:
+                        if anchor["page"] == page:
+                            ctx = anchor["context"].lower()
+                            heading_low = table_heading.lower()
+                            metric_low = metric_name.lower()
+                            
+                            # A. Structural Match (Header context)
+                            header_match = (ctx in heading_low) or (heading_low in ctx)
+                            
+                            # B. Semantic Match (Metric Name vs Standard Keywords)
+                            keyword_match = any(kw.lower() in metric_low for kw in keywords)
+                            
+                            # To link, we need a Header Match AND a Keyword Match 
+                            # OR a very strong Keyword Match if the header is generic (like "Principle 6")
+                            if (header_match and keyword_match) or (keyword_match and len(keywords) > 0):
+                                graph.add_edge(metric_id, std_node_id, 
+                                               relation="MAPPED_TO", 
+                                               confidence=0.98, 
+                                               method="precision_keyword_anchor")
+                                break
+            
+            # 4. Global Fallback: Keyword matching even if the page doesn't match
+            # This catches metrics in summary tables or appendixes
+            if not any(d.get("relation") == "MAPPED_TO" for _, _, d in graph.out_edges(metric_id, data=True)):
+                # Load keywords if not already loaded
+                bank_path = Path("eval_engine/global_question_bank.json")
+                if bank_path.exists():
+                    with open(bank_path, 'r', encoding='utf-8') as f:
+                        bank = json.load(f)
+                        for q in bank.get("questions", []):
+                            keywords = q.get("keywords", [])
+                            metric_low = metric_name.lower()
+                            if any(kw.lower() == metric_low or (len(kw) > 4 and kw.lower() in metric_low) for kw in keywords):
+                                std_node_id = f"std_metric_{slugify(q['id'])}"
+                                if graph.has_node(std_node_id):
+                                    graph.add_edge(metric_id, std_node_id, 
+                                                   relation="MAPPED_TO", 
+                                                   confidence=0.75, 
+                                                   method="global_keyword_fallback")
+                                    break
+
+def _semantic_mapping_pass(graph, models):
+    """Final embedding pass to catch anything the structural discovery missed."""
+    # This can be expanded later for deep semantic linking
+    pass
 
 
 # ── Structured fact handlers ───────────────────────────────────────────────────
 
-def _handle_observation(graph, obs, company_node):
+def _handle_observation(graph, obs, company_node, contextual_name=None):
     """
     Create structured nodes and edges for a MetricObservation.
     Structure: Metric -MEASURES-> Quantitative Value -reported_at-> Reporting Year
     """
-    metric_name = normalize_text(obs.get("metric", "Unknown Metric"), label="ESG Metric")
+    display_name = obs.get("metric", "Unknown Metric")
+    # Use contextual_name if provided to ensure ID stability
+    search_name = contextual_name if contextual_name else display_name
+    
+    metric_name = normalize_text(search_name, label="ESG Metric")
     raw_val     = str(obs.get("value", ""))
     unit_name   = normalize_text(obs.get("unit", ""), label="Unit of Measure")
     year        = str(obs.get("year", "")).strip()
@@ -605,6 +749,8 @@ def _add_esg_pillar_nodes(graph):
                 pid = f"pillar_{pillar.lower()}"
                 if not graph.has_edge(nid, pid):
                     graph.add_edge(nid, pid, relation="CATEGORIZED_AS")
+                    # Task 12: Also set the topic attribute directly on the node for fast lookup
+                    graph.nodes[nid]["topic"] = pillar
                     edges_added += 1
     logging.info("Cross-linker: added %d CATEGORIZED_AS edges (ESG pillars)", edges_added)
 

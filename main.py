@@ -71,20 +71,15 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
 
     # --- TABLE PROCESSING INTEGRATION ---
     original_text = document["text"] # Save raw MD for the structured parser
-    if source_path.endswith(".md"):
-        json_tables_path = Path(r"Z:\outputs") / f"{report_name}_tables.json"
-        logging.info("Attempting to linearize tables from %s", json_tables_path)
-        document["text"] = process_document_tables(document["text"], json_tables_path)
-        # Update pages text as well since it's used in some modules
-        if document["pages"]:
-            document["pages"][0]["text"] = document["text"]
-            document["pages"][0]["end_offset"] = len(document["text"])
+    # Linearization is now disabled to reduce noise in favor of structured parsing
+    # document["text"] = process_document_tables(document["text"], json_tables_path)
     # -------------------------------------
 
     report_out_dir = OUTPUT_DIR / report_name
     report_out_dir.mkdir(parents=True, exist_ok=True)
     
     cache_path = report_out_dir / "intermediates.json"
+    models = None
 
     if llm_only or graph_only:
         if not cache_path.exists():
@@ -108,9 +103,9 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
         sentences = prescan.get("sentences", [])
         document["sentences"] = sentences  # attach for downstream modules
         
-        taxonomy = discover_taxonomy(document, prescan)
+        taxonomy = discover_taxonomy(document, prescan, models)
         logging.info("Classifying ESG thematic coverage...")
-        topics = classify_esg_topics(document, models)
+        topics = classify_esg_topics(document, models, prescan)
         
         # Free memory from classification models
         models.clear('esg_models') 
@@ -186,7 +181,12 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     logging.info("Extracted %d structured facts from tables", len(table_facts))
 
     logging.info("[STAGE 4/5] GRAPH ENRICHMENT & ALGORITHMS")
-    link_after_enrichment(graph, table_facts=table_facts)
+    link_after_enrichment(
+        graph, 
+        table_facts=table_facts, 
+        regulatory_map=taxonomy.get("regulatory_map"),
+        models=models
+    )
     graph = run_graph_algorithms(graph)
 
     # 5. Export
