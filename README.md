@@ -1,165 +1,115 @@
-# Fact Forge — ESG Knowledge Graph Pipeline
+# Fact Forge — ESG Knowledge Graph Pipeline v2.5 (Precision Architecture)
 
-A high-fidelity NLP pipeline for extracting Environmental, Social, and Governance (ESG) disclosures from PDF reports and building a structured Knowledge Graph (KG).
+A high-fidelity regulatory engine for extracting Environmental, Social, and Governance (ESG) disclosures from PDF reports and building a structured Knowledge Graph (KG) compliant with global standards (**SEC, CSRD, SEBI BRSR**).
 
-## Architecture
+## 🚀 Architecture: Multi-Modal Alignment
 
-The pipeline follows a **code-first, LLM-minimal** philosophy: the knowledge graph is constructed entirely by NLP models and rule-based extractors.  The LLM is used **only** for two narrowly-scoped tasks where NLP alone cannot succeed.
+The pipeline follows a **Regulatory-First, Precision-Hardened** philosophy. It aligns unstructured NLP extraction with structured table parsing using a semantic bridge.
 
 ```
 PDF Document
     │
     ▼
 ┌────────────────────────────────────────────────┐
-│  STAGE 1 — PARSING & DISCOVERY  (no LLM)       │
-│  • PDF → text + pages      (pdfplumber)        │
-│  • Sentence splitting      (spaCy)             │
-│  • Taxonomy discovery      (TF-IDF + rules)    │
-│  • ESG topic classification (ESGBERT)          │
-│  • Quantitative/qualitative detection (regex)  │
+│  STAGE 1 — DISCOVERY & MAPPING                 │
+│  • Structural Scaffolding  (spaCy/Docling)     │
+│  • Regulatory Anchoring    (Sentence-EMB)      │
+│  • ESG Pillar Strictness   (Taxonomy Map)      │
 └────────────────────────────────────────────────┘
     │
     ▼
 ┌────────────────────────────────────────────────┐
-│  STAGE 2 — EXTRACTION  (no LLM)                │
-│  • Entity extraction       (GLiNER)            │
-│  • Relation extraction     (GLiREL)            │
-│  • Event & target extraction (rule-based)      │
+│  STAGE 2 — EXTRACTION (HYBRID)                 │
+│  • Zero-Shot NER           (GLiNER)            │
+│  • Relation Extraction     (GLiREL)            │
+│  • High-Fidelity Tables    (Docling Markdown)  │
 └────────────────────────────────────────────────┘
     │
     ▼
 ┌────────────────────────────────────────────────┐
-│  STAGE 3 — TARGETED DISAMBIGUATION  (LLM)      │
-│  • Orphan value resolution (~15 sentences)     │
-│  • Ambiguous metric linking (~10 sentences)    │
-│  • Coreference / pronoun anchoring (~15 sents) │
-│  → Only ~2K tokens sent to LLM (not full doc)  │
+│  STAGE 3 — ASSEMBLY & PRECISION ALIGNMENT      │
+│  • Context-Aware IDs       (Namespace Isolation)│
+│  • Pillar-Strict Linking   (No Cross-Talk)     │
+│  • MAPPED_TO Standards     (Regulatory Bridge) │
 └────────────────────────────────────────────────┘
     │
     ▼
 ┌────────────────────────────────────────────────┐
-│  STAGE 4 — GRAPH ASSEMBLY & ENRICHMENT (no LLM)│
-│  • Entity deduplication    (fuzzy matching)     │
-│  • Graph construction      (NetworkX)          │
-│  • Co-occurrence linking   (page proximity)    │
-│  • Metadata enrichment     (page/context)      │
-│  • Graph algorithms        (centrality, etc.)  │
-└────────────────────────────────────────────────┘
-    │
-    ▼
-┌────────────────────────────────────────────────┐
-│  STAGE 5 — INSIGHT GENERATION  (LLM)           │
-│  • Narrative summary from structured graph     │
-│  • Export: GraphML, CSV, Markdown              │
+│  STAGE 4 — EVALUATION & ANALYTICS              │
+│  • Automated ESG Scorecard (13+ Standard Qs)   │
+│  • Pillar-Aware Validation (Env/Soc/Gov)       │
+│  • YoY Anomaly Detection   (Temporal Edges)    │
 └────────────────────────────────────────────────┘
 ```
 
-### LLM Usage Summary
+## ✨ Key Features
 
-| Stage | LLM? | Tokens | Purpose |
-|-------|------|--------|---------|
-| 1. Parsing & Discovery | ❌ | 0 | NLP + rules |
-| 2. Extraction | ❌ | 0 | GLiNER + GLiREL + regex |
-| 3. Disambiguation | ✅ | ~2K | Resolve only what NLP can't |
-| 4. Graph Assembly | ❌ | 0 | Code-driven |
-| 5. Narrative | ✅ | ~4K | Interpret finished graph |
-| **Total** | | **~6K tokens** | **2 API calls** |
+### 🏢 Context-Aware Namespace
+Replaces generic metric names (e.g., "Total") with unique, context-aware IDs like `esg_metric_emissions_table_scope_1`. This prevents data from different tables from colliding into "monster nodes."
 
-## Features
+### 🛡️ Pillar-Strict Topology
+Enforces a "Wall of Separation" between ESG pillars. The graph assembly engine prevents hallucinations by ensuring that a node discovered in an **Environmental** section cannot be mapped to a **Social** or **Governance** standard.
 
-- **Document Parsing**: PDF text extraction using `pdfplumber` with page-level tracking.
-- **Entity & Relation Extraction**: GLiNER for typed entity recognition, GLiREL for relationship extraction.
-- **Rule-Based Events**: Regex-driven extraction of targets, reductions, and quantitative observations.
-- **Targeted LLM Disambiguation**: Sends only ambiguous sentences (~2K tokens) to resolve orphan values, ambiguous links, and unanchored pronouns.
-- **V2 Graph Architecture**: Typed nodes (Entity, Observation, Target, Event) anchored to identified companies.
-- **LLM Narrative**: Professional investor-grade summary generated from the structured graph.
-- **Caching**: Save/load intermediate results for fast iteration.
+### 📊 Multi-Modal Table Extraction
+Integrates **Docling** for industrial-grade table parsing. Structured table facts (Metric, Value, Unit, Year) are extracted from complex layouts and automatically tethered to standard regulatory indicators.
 
-## Setup
+### 🔍 Semantic Regulatory Mapping
+Uses **Transformer Embeddings** (Cosine Similarity) to map document headers to **13+ mandatory indicators** from:
+- **India**: SEBI BRSR Essential Indicators.
+- **USA**: SEC Climate-Related Disclosures.
+- **EU**: CSRD / ESRS Requirements.
 
-### Prerequisites
-- Python 3.10+
-- Google AI API key ([get one here](https://aistudio.google.com/apikey))
-
-### Installation
-
-```bash
-pip install -r requirements.txt
-```
-
-### Configuration
-
-1. Create a `.env` file in the project root:
-```
-GOOGLE_API_KEY=your_api_key_here
-```
-
-2. The model defaults to `gemini-2.5-flash`. Change in `config.py` if needed.
-
-## Usage
+## 🛠️ Usage
 
 ### Full Pipeline
 ```bash
 python main.py path/to/report.pdf
 ```
 
-### Skip LLM (NLP-only graph)
+### Graph-Only Mode (Fast Assembly Tuning)
+Load cached extraction results and re-run only the graph assembly and mapping logic.
 ```bash
-python main.py path/to/report.pdf --skip-llm
-```
-
-### Fast Iteration (LLM-Only)
-First run with caching:
-```bash
-python main.py path/to/report.pdf --save-intermediates
-```
-Then iterate on LLM steps only:
-```bash
-python main.py path/to/report.pdf --llm-only
+python main.py path/to/report.pdf --graph-only
 ```
 
 ### Options
 | Flag | Description |
 |------|-------------|
 | `--skip-llm` | Skip all LLM steps (stages 3 & 5) |
-| `--save-intermediates` | Cache extraction results to `output/intermediates.json` |
-| `--llm-only` | Load cached results, skip extraction models |
+| `--save-intermediates` | Cache extraction results for fast iteration |
+| `--graph-only` | Load cached extraction, tune graph assembly only |
 | `--relation-threshold` | Confidence threshold for relations (default: 0.08) |
 
-## Outputs
+## 📈 Evaluation & Skills
 
-| File | Description |
-|------|-------------|
-| `output/graph.graphml` | Full Knowledge Graph in GraphML format |
-| `output/insights.md` | LLM-generated narrative summary |
-| `output/nodes.csv` | Flat file of all graph nodes |
-| `output/edges.csv` | Flat file of all graph edges |
-| `output/observations.csv` | Extracted quantitative metrics |
+Trigger specialized skills after a run to audit the graph:
 
-## Visualization
+- **ESG Evaluator**: `python eval_engine/evaluator.py graph.graphml`
+  - Performs standard question answering against the KG.
+- **Anomaly Detection**: `python eval_engine/anomaly_skill.py graph.graphml`
+  - Flags YoY spikes and data contradictions.
 
-```bash
-python graph_viewer.py output/graph.graphml
-```
+## 📊 Knowledge Graph Schema
 
-## Project Structure
+| Node Type | Purpose |
+|-----------|---------|
+| `Company` | The reporting entity. |
+| `Standard ESG Metric` | Canonical regulatory indicator (e.g., `ENV_GHG_S1`). |
+| `ESG Metric` | Specific fact found in document (Context-Aware). |
+| `Quantitative Value` | The actual numeric disclosure. |
+| `ESG Pillar` | Environmental, Social, or Governance parent node. |
 
-```
-fact-forge/
-├── main.py                    # Pipeline orchestrator
-├── config.py                  # Model names, thresholds, ESG schemas
-├── model_loader.py            # NLP model loading (spaCy, GLiNER, etc.)
-├── graph_viewer.py            # Interactive graph visualization
-├── requirements.txt
-├── .env                       # Google AI API key (git-ignored)
-│
-├── parsers/                   # PDF parsing
-├── discovery/                 # spaCy prescan, taxonomy discovery
-├── classification/            # ESG topic & quantitative classification
-├── extraction/                # Entity, relation, event extraction + LLM disambiguation
-├── assembly/                  # Graph building, dedup, normalization, export
-├── enrichment/                # Metadata enrichment, graph algorithms
-├── insight/                   # LLM narrative generation
-├── utils/                     # LLM client (Gemini API)
-└── output/                    # Generated artifacts (git-ignored)
-```
+| Edge Relation | Meaning |
+|---------------|---------|
+| `MAPPED_TO` | Links a document fact to a Regulatory Standard. |
+| `MEASURES` | Links a Metric to its Numeric Value. |
+| `HAS_PILLAR` | Enforces structural categorization. |
+| `YEAR_OVER_YEAR` | Links temporal data points. |
+
+## 🏗️ Project Structure
+
+- `discovery/`: Semantic taxonomy and structural prescans.
+- `extraction/`: GLiNER, GLiREL, and Docling table parser.
+- `assembly/`: Contextual ID generation and regulatory bridging.
+- `eval_engine/`: Regulatory question bank and evaluation logic.
+- `output/`: GraphML, Insights, and CSV exports.
