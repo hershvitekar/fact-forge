@@ -175,14 +175,13 @@ def link_after_enrichment(graph: nx.DiGraph, table_facts: list = None, regulator
     Public entry point: add MEASURES edges and process structured table data.
     Now supports regulatory_map for ESGBert-driven anchoring.
     """
-    if table_facts:
-        _process_table_facts(graph, table_facts, regulatory_map)
-        
     # Pre-create standard nodes from the global question bank
     _create_standard_nodes(graph, regulatory_map)
     
+    if table_facts:
+        _process_table_facts(graph, table_facts, regulatory_map)
+    
     _link_cooccurring_values(graph)
-    _link_to_standard_metrics(graph)
     
     # Final semantic pass using embeddings if available
     if models and models.embedder:
@@ -232,7 +231,8 @@ def _process_table_facts(graph, facts, regulatory_map=None):
             "metric": metric_name,
             "value": f["value"],
             "year": f["year"],
-            "unit": f.get("unit", "")
+            "unit": f.get("unit", ""),
+            "context": f.get("context", "")
         }
         
         # Find if we have a company node to anchor to
@@ -253,6 +253,12 @@ def _process_table_facts(graph, facts, regulatory_map=None):
         
         if not graph.has_node(metric_id):
             graph.add_node(metric_id, text=metric_name, label="ESG Metric", type="metric")
+            # Assign Pillar (Topic) immediately to assist anchoring
+            text_for_pillar = (metric_name + " " + table_heading).lower()
+            for pillar, keywords in _ESG_PILLAR_KEYWORDS.items():
+                if any(kw in text_for_pillar for kw in keywords):
+                    graph.nodes[metric_id]["topic"] = pillar
+                    break
             
         if company_node:
             graph.add_edge(company_node, metric_id, relation="REPORTS_METRIC")
@@ -270,13 +276,23 @@ def _process_table_facts(graph, facts, regulatory_map=None):
                     page_standards.append(q_id)
             
             # 2. Heuristic: If only ONE standard is on this page, link it directly (Safe Fallback)
+            # HARDENED: Only link if the pillar matches (prevents SOC_GENDER_PAY hijacking)
             if len(page_standards) == 1:
-                std_node_id = f"std_metric_{slugify(page_standards[0])}"
+                q_id = page_standards[0]
+                std_node_id = f"std_metric_{slugify(q_id)}"
                 if graph.has_node(std_node_id):
-                    graph.add_edge(metric_id, std_node_id, 
-                                   relation="MAPPED_TO", 
-                                   confidence=0.85, 
-                                   method="single_anchor_fallback")
+                    # Get pillars for both
+                    std_pillar = graph.nodes[std_node_id].get("topic", "").lower()
+                    metric_pillar = graph.nodes[metric_id].get("topic", "").lower()
+                    
+                    if std_pillar == metric_pillar or not metric_pillar:
+                        graph.add_edge(metric_id, std_node_id, 
+                                       relation="MAPPED_TO", 
+                                       confidence=0.85, 
+                                       method="single_anchor_fallback")
+                    else:
+                        logging.warning("PILLAR MISMATCH: Refusing to anchor '%s' (%s) to '%s' (%s)", 
+                                        metric_name, metric_pillar, q_id, std_pillar)
             
             # 3. Precision: If multiple standards, use Header + Keyword Matching
             elif len(page_standards) > 1:
@@ -308,7 +324,8 @@ def _process_table_facts(graph, facts, regulatory_map=None):
                             header_match = (ctx in heading_low) or (heading_low in ctx)
                             
                             # B. Semantic Match (Metric Name vs Standard Keywords)
-                            keyword_match = any(kw.lower() in metric_low for kw in keywords)
+                            # HARDENED: Only use keywords with >= 5 chars for substring matching
+                            keyword_match = any(kw.lower() == metric_low or (len(kw) >= 5 and kw.lower() in metric_low) for kw in keywords)
                             
                             # To link, we need a Header Match AND a Keyword Match 
                             # OR a very strong Keyword Match if the header is generic (like "Principle 6")
@@ -330,7 +347,7 @@ def _process_table_facts(graph, facts, regulatory_map=None):
                         for q in bank.get("questions", []):
                             keywords = q.get("keywords", [])
                             metric_low = metric_name.lower()
-                            if any(kw.lower() == metric_low or (len(kw) > 4 and kw.lower() in metric_low) for kw in keywords):
+                            if any(kw.lower() == metric_low or (len(kw) >= 5 and kw.lower() in metric_low) for kw in keywords):
                                 std_node_id = f"std_metric_{slugify(q['id'])}"
                                 if graph.has_node(std_node_id):
                                     graph.add_edge(metric_id, std_node_id, 
@@ -353,18 +370,25 @@ def _handle_observation(graph, obs, company_node, contextual_name=None):
     Structure: Metric -MEASURES-> Quantitative Value -reported_at-> Reporting Year
     """
     display_name = obs.get("metric", "Unknown Metric")
+    # POLISH: Strip footnotes (asterisks) from metric names and search keys
+    display_name = display_name.replace("*", "").strip()
+    
     # Use contextual_name if provided to ensure ID stability
     search_name = contextual_name if contextual_name else display_name
+    search_name = search_name.replace("*", "").strip()
     
     metric_name = normalize_text(search_name, label="ESG Metric")
-    raw_val     = str(obs.get("value", ""))
+    
+    # POLISH: Strip footnotes from raw values before storage
+    raw_val = str(obs.get("value", ""))
+    clean_raw_val = raw_val.replace("*", "").strip()
     unit_name   = normalize_text(obs.get("unit", ""), label="Unit of Measure")
     year        = str(obs.get("year", "")).strip()
     if year.lower() == "none": year = ""
 
     metric_id = f"esg_metric_{slugify(metric_name)}"
     if not graph.has_node(metric_id):
-        graph.add_node(metric_id, text=metric_name, label="ESG Metric", type="metric")
+        graph.add_node(metric_id, text=metric_name, label="ESG Metric", type="metric", context=obs.get("context", ""))
 
     if company_node:
         graph.add_edge(company_node, metric_id, relation="REPORTS_METRIC")
@@ -376,7 +400,8 @@ def _handle_observation(graph, obs, company_node, contextual_name=None):
         "text": raw_val,
         "label": "Quantitative Value",
         "type": "value",
-        "raw_value": raw_val
+        "raw_value": raw_val,
+        "context": obs.get("context", "")
     }
     try:
         val_attrs["value_float"] = float(raw_val)
@@ -417,6 +442,7 @@ def _handle_target(graph, target, company_node):
                        text=f"{target_type} ({year})",
                        label="Target",
                        target_type=target_type, year=year,
+                       context=context,
                        type="target")
 
     if company_node:
@@ -753,60 +779,3 @@ def _add_esg_pillar_nodes(graph):
                     graph.nodes[nid]["topic"] = pillar
                     edges_added += 1
     logging.info("Cross-linker: added %d CATEGORIZED_AS edges (ESG pillars)", edges_added)
-
-
-STANDARD_METRICS = {
-    "Scope 1 Emissions": ["scope 1", "direct emissions", "ghg protocol scope 1"],
-    "Scope 2 Emissions": ["scope 2", "indirect emissions", "purchased electricity"],
-    "Total Energy": ["total energy", "energy consumption", "energy usage", "joules"],
-    "Total Water": ["water consumption", "water withdrawal", "total water", "kilolitres"],
-    "Waste Generated": ["total waste", "waste generated", "solid waste", "waste intensity"],
-    "LTIFR": ["ltifr", "lost time injury", "injury frequency"],
-    "Gender Diversity": ["female employees", "women in workforce", "gender diversity", "board of directors"],
-    "Social Impact": ["lives impacted", "community reach", "social beneficiaries", "prabhat", "shakti", "nutrition"]
-}
-
-def _link_to_standard_metrics(graph):
-    """Map company-specific metrics to a set of global standard nodes."""
-    # Mapping of headings to pillars to reduce ambiguity
-    HEADING_PILLAR_MAP = {
-        "Principle 6": "Environmental",
-        "Environmental": "Environmental",
-        "Climate": "Environmental",
-        "Water": "Environmental",
-        "Principle 3": "Social",
-        "Social": "Social",
-        "Workforce": "Social",
-        "Diversity": "Social",
-        "Principle 5": "Social", # Human Rights
-        "CSR": "Social",
-        "Principle 8": "Social", # Community
-        "Prabhat": "Social"
-    }
-
-    for std_name, keywords in STANDARD_METRICS.items():
-        std_id = f"std_metric_{slugify(std_name)}"
-        if not graph.has_node(std_id):
-            graph.add_node(std_id, text=std_name, label="Standard ESG Metric", type="standard_metric")
-        
-        for nid, ndata in graph.nodes(data=True):
-            if ndata.get("label") == "ESG Metric":
-                metric_text = ndata.get("text", "").lower()
-                heading = ndata.get("table_heading", "")
-                
-                # Check for direct keyword match
-                match = any(kw in metric_text for kw in keywords)
-                
-                # Check for context match if the metric is ambiguous
-                # e.g. "Total consumption" in "Principle 6" is likely Energy or Water
-                if not match and heading:
-                    for h_key, pillar in HEADING_PILLAR_MAP.items():
-                        if h_key.lower() in heading.lower():
-                            # If we are under Principle 6 and the metric has "energy" or "emissions"
-                            if pillar == "Environmental" and ("energy" in metric_text or "emission" in metric_text or "water" in metric_text):
-                                # Further refine matching logic here if needed
-                                pass
-                
-                if match:
-                    graph.add_edge(nid, std_id, relation="MAPPED_TO")
-    logging.info("Standardization: Mapped metrics to global standard categories using context.")

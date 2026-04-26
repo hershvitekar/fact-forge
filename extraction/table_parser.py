@@ -29,22 +29,44 @@ def get_tables_with_context(text: str):
     lines = text.split('\n')
     tables = []
     current_heading = "Top Level"
+    current_page = 1
     current_table_lines = []
+    
     for line in lines:
-        if line.startswith('#'): current_heading = line.strip('# ').strip()
-        if line.strip().startswith('|'): current_table_lines.append(line)
+        # Detect page markers
+        page_match = re.search(r'<!-- PAGE_BREAK: (\d+) -->', line)
+        if page_match:
+            current_page = int(page_match.group(1))
+            continue
+            
+        if line.startswith('#'): 
+            current_heading = line.strip('# ').strip()
+        if line.strip().startswith('|'): 
+            current_table_lines.append(line)
         else:
             if current_table_lines:
                 table_str = '\n'.join(current_table_lines)
                 if '-' in table_str:
                     rows = parse_markdown_table(table_str)
-                    if rows: tables.append({"heading": current_heading, "rows": rows})
+                    if rows: 
+                        tables.append({
+                            "heading": current_heading, 
+                            "rows": rows,
+                            "page": current_page
+                        })
                 current_table_lines = []
+    
+    # Handle the last table if the file doesn't end with a newline
     if current_table_lines:
         table_str = '\n'.join(current_table_lines)
         if '-' in table_str:
             rows = parse_markdown_table(table_str)
-            if rows: tables.append({"heading": current_heading, "rows": rows})
+            if rows: 
+                tables.append({
+                    "heading": current_heading, 
+                    "rows": rows,
+                    "page": current_page
+                })
     return tables
 
 def extract_esg_facts_from_tables(tables):
@@ -54,6 +76,7 @@ def extract_esg_facts_from_tables(tables):
     for table in tables:
         heading = table.get("heading", "Unknown")
         rows = table.get("rows", [])
+        page = table.get("page", 1)
         if len(rows) < 2: continue
             
         header = rows[0]
@@ -113,6 +136,8 @@ def extract_esg_facts_from_tables(tables):
                             "unit": row_unit or ("%" if "%" in raw_val else ""),
                             "year": year,
                             "heading": heading,
-                            "raw_source": raw_val
+                            "raw_source": raw_val,
+                            "context": f"Table Row: {' | '.join([str(c) for c in row])}",
+                            "page": page
                         })
     return facts

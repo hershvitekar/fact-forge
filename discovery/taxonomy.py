@@ -41,24 +41,41 @@ def discover_taxonomy(document, prescan, models=None):
     regulatory_map = {} # Standard_ID -> List of (page, score, context)
     
     # Threshold for a "Regulatory Anchor"
-    # Lowered from 0.55 to 0.52 to improve recall on dense/noisy HUL headers
-    THRESHOLD = 0.52 
+    # Lowered from 0.52 to 0.45 to significantly improve recall
+    THRESHOLD = 0.45 
     
+    # ── Category Keywords for structural fallback ─────────────────────────────
+    PILLAR_KEYWORDS = {
+        "ENV": ["environmental", "principle 6", "climate", "water", "waste", "energy", "emissions"],
+        "SOC": ["social", "principle 3", "principle 8", "workforce", "employees", "safety", "communities", "diversity"],
+        "GOV": ["governance", "principle 1", "board", "directors", "ethics", "compliance"]
+    }
+
     for q_idx, question in enumerate(questions):
         q_id = question["id"]
+        pillar_code = q_id.split('_')[0] if '_' in q_id else ""
+        pillar_kws = PILLAR_KEYWORDS.get(pillar_code, [])
+
         # Find best scaffold matches for this specific regulatory indicator
         q_sims = similarities[:, q_idx]
-        best_scaffold_indices = np.where(q_sims > THRESHOLD)[0]
+        best_scaffold_indices = list(np.where(q_sims > THRESHOLD)[0])
         
+        # KEYWORD FALLBACK: If embedding failed, look for pillar-specific headers
+        if not best_scaffold_indices:
+            for s_idx, item in enumerate(scaffold):
+                header_text = item["text"].lower()
+                if any(kw in header_text for kw in pillar_kws):
+                    # If the header matches the pillar, it's a valid anchor
+                    best_scaffold_indices.append(s_idx)
+
         anchors = []
         for s_idx in best_scaffold_indices:
             item = scaffold[s_idx]
             text = item["text"]
             
-            # STRICT FILTER: Only structural headers are anchors. 
-            # Narrative sentences (long text without header markers) are rejected.
-            is_narrative = len(text.split()) > 20 and not text.startswith('#')
-            if item.get("type") == "heading" and not is_narrative:
+            # Narrative filter (slightly relaxed: headers can be up to 30 words)
+            is_narrative = len(text.split()) > 30 and not text.startswith('#')
+            if not is_narrative:
                 anchors.append({
                     "page": item["page"],
                     "score": float(q_sims[s_idx]),

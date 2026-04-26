@@ -87,27 +87,57 @@ def export_kg(graph: nx.DiGraph, output_dir) -> None:
     nodes_by_label = {}
     for n, d in graph.nodes(data=True):
         label = d.get("label", "Unknown").replace(" ", "_")
-        nodes_by_label.setdefault(label, []).append({"id": n, **d})
+        # POLISH: Extract essential properties including context for narrative insights
+        node_props = {
+            "id": n,
+            "text": d.get("text", ""),
+            "topic": d.get("topic", ""),
+            "page": d.get("page_number", 1),
+            "context": d.get("context", "")
+        }
+        # Add numeric value for Quantitative Values
+        if label == "Quantitative_Value":
+            node_props["value_float"] = d.get("value_float", 0.0)
 
-    # 2. Group edges by Relation
-    edges_by_relation = {}
+        nodes_by_label.setdefault(label, []).append(node_props)
+
+    # 2. Group edges by Relation AND Node Types (Critical for Kùzu)
+    # Kùzu Rel Tables are typed: FROM Table TO Table. 
+    # We must separate them to avoid "Primary Key Not Found" errors.
+    edges_by_type = {}
     for u, v, d in graph.edges(data=True):
         rel = d.get("relation", "UNKNOWN_RELATION").replace(" ", "_")
-        edges_by_relation.setdefault(rel, []).append({"source": u, "target": v, **d})
+        
+        # Get labels of the nodes
+        src_label = graph.nodes[u].get("label", "Unknown").replace(" ", "_")
+        dst_label = graph.nodes[v].get("label", "Unknown").replace(" ", "_")
+        
+        # POLISH: Use TRIPLE UNDERSCORE to avoid confusion with table names like Unit_of_Measure
+        type_key = f"{rel}___{src_label}___{dst_label}"
+        
+        edge_props = {
+            "from": u,
+            "to": v,
+            "confidence": d.get("confidence", 1.0)
+        }
+        if "year" in d: edge_props["year"] = d["year"]
+        if "unit" in d: edge_props["unit"] = d["unit"]
+
+        edges_by_type.setdefault(type_key, []).append(edge_props)
 
     # Export Nodes
     for label, nodes in nodes_by_label.items():
         df = pd.DataFrame(nodes)
         csv_path = output_path / f"nodes_{label}.csv"
         df.to_csv(csv_path, index=False)
-        logging.info("Exported %d %s nodes", len(nodes), label)
+        logging.info("Exported %d %s nodes (cleaned)", len(nodes), label)
 
-    # Export Edges
-    for rel, edges in edges_by_relation.items():
+    # Export Edges (Typed)
+    for type_key, edges in edges_by_type.items():
         df = pd.DataFrame(edges)
-        csv_path = output_path / f"edges_{rel}.csv"
+        csv_path = output_path / f"edges_{type_key}.csv"
         df.to_csv(csv_path, index=False)
-        logging.info("Exported %d %s edges", len(edges), rel)
+        logging.info("Exported %d %s edges (typed)", len(edges), type_key)
 
     # 3. Quality Report
     export_quality_report(graph, output_path)
