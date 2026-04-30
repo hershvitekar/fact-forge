@@ -1,27 +1,54 @@
 import logging
 
-def classify_esg_topics(document, models):
-    """Classify ESG topic signals using ESGBERT and other models."""
-    logging.info("Classifying ESG topics")
-    text = document.get("text", "")
+def chunk_text(text, size=1000, overlap=100):
+    """Split text into overlapping chunks to ensure no signal is lost."""
+    if len(text) <= size:
+        return [text]
+    chunks = []
+    for i in range(0, len(text), size - overlap):
+        chunks.append(text[i:i + size])
+    return chunks
+
+def classify_esg_topics(document, models, prescan=None):
+    """
+    Classify ESG topic signals using ESGBERT with a sliding window 
+    to handle long structural blocks without data loss.
+    """
+    logging.info("Classifying ESG topics via Sliding Window Scaffold Scan")
     
-    # We'll split the text into segments (e.g., first 512 characters or sentences)
-    # For a full implementation, we might want to sample across the document.
-    sample_text = text[:1000] # Use a sample for efficiency
+    scaffold = prescan.get("scaffold", []) if prescan else []
+    if not scaffold:
+        text = document.get("text", "")
+        scaffold = [{"text": text[:5000]}] # Larger sample if no scaffold
+        
+    topic_scores = {"environment": [], "social": [], "governance": []}
     
-    results = {}
-    
-    if models.esg_env:
-        env_res = models.esg_env(sample_text)
-        # Assuming the pipeline returns a list of labels/scores
-        results["environment"] = env_res[0]["score"] if env_res else 0.0
+    for item in scaffold:
+        full_text = item["text"]
+        # Split into chunks to respect model limits (512 tokens / ~2000 chars)
+        chunks = chunk_text(full_text)
         
-    if models.esg_social:
-        soc_res = models.esg_social(sample_text)
-        results["social"] = soc_res[0]["score"] if soc_res else 0.0
-        
-    if models.esg_gov:
-        gov_res = models.esg_gov(sample_text)
-        results["governance"] = gov_res[0]["score"] if gov_res else 0.0
-        
-    return results
+        for chunk in chunks:
+            # Environmental
+            if models.esg_env:
+                res = models.esg_env(chunk)
+                if res: topic_scores["environment"].append(res[0]["score"])
+            
+            # Social
+            if models.esg_social:
+                res = models.esg_social(chunk)
+                if res: topic_scores["social"].append(res[0]["score"])
+                
+            # Governance
+            if models.esg_gov:
+                res = models.esg_gov(chunk)
+                if res: topic_scores["governance"].append(res[0]["score"])
+
+    # Final aggregation
+    final_results = {}
+    for cat, scores in topic_scores.items():
+        # We take the max signal found in any chunk/scaffold point 
+        # to ensure the most relevant topic is highlighted
+        final_results[cat] = max(scores) if scores else 0.0
+            
+    return final_results

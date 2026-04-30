@@ -74,51 +74,70 @@ def export_quality_report(graph: nx.DiGraph, output_dir: Path) -> dict:
 
 def export_kg(graph: nx.DiGraph, output_dir) -> None:
     """
-    Export the knowledge graph into multiple formats:
-      - observations.json   (MetricObservation nodes)
-      - observations.csv    (same, as DataFrame)
-      - nodes.csv           (all nodes)
-      - edges.csv           (all edges)
-      - graph_quality.json  (Task 8: health metrics + grade)
+    Export the knowledge graph into Kùzu-compatible schema-separated formats:
+      - nodes_{Label}.csv
+      - edges_{Relation}.csv
+      - graph_quality.json
     """
-    logging.info("Exporting KG to structured formats")
+    logging.info("Exporting KG to Kùzu-compatible separated schema CSVs")
     output_path = Path(output_dir)
-    output_path.mkdir(exist_ok=True)
+    output_path.mkdir(parents=True, exist_ok=True)
 
-    # ── 1. Observations ────────────────────────────────────────────────────────
-    observations = []
+    # 1. Group nodes by Label
+    nodes_by_label = {}
     for n, d in graph.nodes(data=True):
-        if d.get("type") == "observation":
-            observations.append(d)
+        label = d.get("label", "Unknown").replace(" ", "_")
+        # POLISH: Extract essential properties including context for narrative insights
+        node_props = {
+            "id": n,
+            "text": d.get("text", ""),
+            "topic": d.get("topic", ""),
+            "page": d.get("page_number", 1),
+            "context": d.get("context", "")
+        }
+        # Add numeric value for Quantitative Values
+        if label == "Quantitative_Value":
+            node_props["value_float"] = d.get("value_float", 0.0)
 
-    with open(output_path / "observations.json", "w", encoding="utf-8") as f:
-        json.dump(observations, f, indent=2)
+        nodes_by_label.setdefault(label, []).append(node_props)
 
-    if observations:
-        pd.DataFrame(observations).to_csv(
-            output_path / "observations.csv", index=False
-        )
-        logging.info("Exported %d observations to CSV", len(observations))
-    else:
-        logging.warning("No observations found — observations.csv will be empty")
-        # Write header-only CSV so downstream tools don't break
-        pd.DataFrame(columns=["text", "label", "value", "year", "unit", "type", "centrality"]).to_csv(
-            output_path / "observations.csv", index=False
-        )
-
-    # ── 2. All Nodes ──────────────────────────────────────────────────────────
-    nodes = []
-    for n, d in graph.nodes(data=True):
-        nodes.append({"id": n, **d})
-    pd.DataFrame(nodes).to_csv(output_path / "nodes.csv", index=False)
-    logging.info("Exported %d nodes to nodes.csv", len(nodes))
-
-    # ── 3. All Edges ──────────────────────────────────────────────────────────
-    edges = []
+    # 2. Group edges by Relation AND Node Types (Critical for Kùzu)
+    # Kùzu Rel Tables are typed: FROM Table TO Table. 
+    # We must separate them to avoid "Primary Key Not Found" errors.
+    edges_by_type = {}
     for u, v, d in graph.edges(data=True):
-        edges.append({"source": u, "target": v, **d})
-    pd.DataFrame(edges).to_csv(output_path / "edges.csv", index=False)
-    logging.info("Exported %d edges to edges.csv", len(edges))
+        rel = d.get("relation", "UNKNOWN_RELATION").replace(" ", "_")
+        
+        # Get labels of the nodes
+        src_label = graph.nodes[u].get("label", "Unknown").replace(" ", "_")
+        dst_label = graph.nodes[v].get("label", "Unknown").replace(" ", "_")
+        
+        # POLISH: Use TRIPLE UNDERSCORE to avoid confusion with table names like Unit_of_Measure
+        type_key = f"{rel}___{src_label}___{dst_label}"
+        
+        edge_props = {
+            "from": u,
+            "to": v,
+            "confidence": d.get("confidence", 1.0)
+        }
+        if "year" in d: edge_props["year"] = d["year"]
+        if "unit" in d: edge_props["unit"] = d["unit"]
 
-    # ── 4. Task 8: Quality Report ─────────────────────────────────────────────
+        edges_by_type.setdefault(type_key, []).append(edge_props)
+
+    # Export Nodes
+    for label, nodes in nodes_by_label.items():
+        df = pd.DataFrame(nodes)
+        csv_path = output_path / f"nodes_{label}.csv"
+        df.to_csv(csv_path, index=False)
+        logging.info("Exported %d %s nodes (cleaned)", len(nodes), label)
+
+    # Export Edges (Typed)
+    for type_key, edges in edges_by_type.items():
+        df = pd.DataFrame(edges)
+        csv_path = output_path / f"edges_{type_key}.csv"
+        df.to_csv(csv_path, index=False)
+        logging.info("Exported %d %s edges (typed)", len(edges), type_key)
+
+    # 3. Quality Report
     export_quality_report(graph, output_path)

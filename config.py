@@ -1,4 +1,9 @@
-LLM_URL = "http://192.168.1.18:8080"
+# ── LLM Backend (Google Gemini) ───────────────────────────────────────────────
+# API key is read from the GOOGLE_API_KEY environment variable.
+GEMINI_MODEL = "gemini-3-flash-preview"
+
+# Legacy: local llama.cpp server (no longer used)
+# LLM_URL = "http://192.168.1.18:8080"
 GLINER_MODEL = "urchade/gliner_medium-v2.1"
 GLIREL_MODEL = "jackboyla/glirel-large-v0"
 ESGBERT_MODEL = "ESGBERT/EnvironmentalBERT-environmental"
@@ -19,10 +24,20 @@ ENTITY_BATCH_SIZE = 16       # Number of sentences to process at once for GLiNER
 
 # === Quantitative classifier signals ===
 QUANT_UNITS = [
-    r'\b(tonnes?|tCO2e?|MWh|GWh|kWh|GJ|TJ)\b',
-    r'\b(cubic\s?met[er]+s?|hectares?|litres?|liters?|gallons?)\b',
-    r'\b(kg|kilograms?|megalitr[e]+s?|megalit[er]s?)\b',
+    r'\b(tonnes?|metric tonnes?|tCO2e?|mtCO2e|MMT|MWh|GWh|kWh|GJ|TJ|gigajoules?|terajoules?|megajoules?|MJ)\b',
+    r'\b(cubic\s?met[er]+s?|hectares?|litres?|liters?|gallons?|megalitr[e]+s?|megalit[er]s?)\b',
+    r'\b(kg|kilograms?|grams?|lbs|pounds?)\b',
+    r'[\$\xA3\u20AC\xA5]', # Currency symbols: $, £, €, ¥
+    r'\b(USD|GBP|EUR|JPY|CHF|CAD|AUD|INR|dollars?|euros?|pounds?|yen|rupees?)\b',
+    r'%|percent(age)?\b', 
+    r'\b(billion|million|thousand|bn|m|k)\b', # Scale markers
+    r'\b(rate|ratio|index|score|points|level|intensity|volume|quantity|share|proportion|count|number)\b', # ESG performance units
+    r'\b(employees?|workers?|full-time equivalents?|fte)\b', # Social/Human Capital units
 ]
+
+
+
+
 
 QUANT_COMPARATORS = [
     r'\b(increased?|decreased?|reduced?|grew|declined?|rose|fell)\b',

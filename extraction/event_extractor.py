@@ -27,16 +27,52 @@ _NET_ZERO_RE = re.compile(
 
 
 def _extract_numbers(sentence: str) -> list[dict]:
-    """Return all numeric values found in a sentence with their units."""
+    """
+    Return all numeric values found in a sentence with their units.
+    Enforces strict proximity anchoring: A number is invalid unless anchored to
+    A) A unit (either attached or in radius) AND B) A Date/Year in radius.
+    """
     results = []
     for m in _NUMBER_RE.finditer(sentence):
         raw_val = m.group(1)
         unit = m.group(2) or ""
         if not raw_val:
             continue
+            
+        # Extract a 60-character radius (~10 tokens) around the number
+        start_idx = max(0, m.start() - 60)
+        end_idx = min(len(sentence), m.end() + 60)
+        radius_text = sentence[start_idx:end_idx]
+        
+        # STRICT RULE B: Must have a Date/Year in the radius
+        year_m = re.search(r'\b(20\d{2})\b', radius_text)
+        if not year_m:
+            continue  # Discard floating numbers with no year
+            
+        year = year_m.group(1)
+        
+        # STRICT RULE A: Must have a known Unit in the radius (if not attached)
+        if not unit:
+            found_unit = ""
+            for unit_pattern in config.QUANT_UNITS:
+                unit_m = re.search(unit_pattern, radius_text, re.IGNORECASE)
+                if unit_m:
+                    found_unit = unit_m.group(0)
+                    break
+            
+            if not found_unit:
+                continue  # Discard numbers with no unit
+            unit = found_unit
+
         # Normalise: strip commas and currency symbols
         clean_val = raw_val.replace(",", "").replace("$", "").strip()
-        results.append({"value": clean_val, "unit": unit.strip(), "raw": m.group(0).strip()})
+        results.append({
+            "value": clean_val, 
+            "unit": unit.strip(), 
+            "year": year,
+            "raw": m.group(0).strip(),
+            "start": m.start()
+        })
     return results
 
 
@@ -66,9 +102,7 @@ def _best_subject(sentence: str, value_match_start: int) -> str:
 def extract_events(sentences: list[str]) -> list[dict]:
     """
     Extract ESG events (reductions, increases, commitments, observations)
-    using rule-based patterns with numeric pre-extraction.
-
-    Returns a list of structured fact dicts compatible with graph_builder.py.
+    using strict proximity anchoring for numeric values.
     """
     logging.info("Extracting ESG events from %d sentences", len(sentences))
     events = []
@@ -81,10 +115,7 @@ def extract_events(sentences: list[str]) -> list[dict]:
         has_comparator = bool(re.search(comparator_pattern, sentence, re.IGNORECASE))
         has_temporal   = bool(re.search(temporal_pattern, sentence, re.IGNORECASE))
 
-        if not (has_comparator or has_temporal):
-            # Still check for commitments/targets below
-            pass
-        else:
+        if has_comparator or has_temporal:
             event_type = "Observation"
             if re.search(r'\breduc(e|ed|ing|tion)\b', sentence, re.IGNORECASE):
                 event_type = "Reduction"
@@ -93,40 +124,18 @@ def extract_events(sentences: list[str]) -> list[dict]:
             elif re.search(r'\bdecreas(e|ed|ing)\b', sentence, re.IGNORECASE):
                 event_type = "Reduction"
 
-            # ── Task 3 core: numeric pre-extraction ───────────────────────────
+            # Use strict numeric extraction
             numbers = _extract_numbers(sentence)
-
-            # Find percentage first (most specific for ESG events)
-            pct_match = re.search(r'(\d+(?:\.\d+)?\s?%)', sentence)
-
-            if pct_match:
-                value = pct_match.group(1).strip()
-                unit  = "%"
-                subject = _best_subject(sentence, pct_match.start())
-            elif numbers:
-                # Use first numeric value found
-                best = numbers[0]
-                value   = best["value"]
-                unit    = best["unit"]
-                subject = _best_subject(sentence, sentence.find(best["raw"]))
-            else:
-                value   = "unknown"
-                unit    = ""
-                subject = "Metric"
-
-            # Year extraction
-            year_m = re.search(r'\b(20\d{2})\b', sentence)
-            year   = year_m.group(1) if year_m else None
-
-            # Only emit event if we have a real value OR a clear direction
-            if value != "unknown" or event_type != "Observation":
+            
+            for num_data in numbers:
+                subject = _best_subject(sentence, num_data["start"])
                 events.append({
                     "type":       "Event",
                     "event_type": event_type,
                     "metric":     subject,
-                    "value":      value,
-                    "unit":       unit,
-                    "year":       year,
+                    "value":      num_data["value"],
+                    "unit":       num_data["unit"],
+                    "year":       num_data["year"],
                     "context":    sentence.strip(),
                 })
 
@@ -148,22 +157,23 @@ def extract_events(sentences: list[str]) -> list[dict]:
                 })
 
         # ── Numeric-only observations (no comparator needed) ──────────────────
-        # Captures sentences with clear metric+value pairs (e.g., GHG tables)
         if not has_comparator and not is_commitment:
             numbers = _extract_numbers(sentence)
             esg_hint = _ESG_SUBJECT_HINTS.search(sentence)
+            
+            # Since numbers are strictly validated, we just need an ESG context hint to emit an observation
             if numbers and esg_hint:
-                best    = numbers[0]
-                year_m  = re.search(r'\b(20\d{2})\b', sentence)
-                events.append({
-                    "type":       "Event",
-                    "event_type": "Observation",
-                    "metric":     esg_hint.group(0).strip(),
-                    "value":      best["value"],
-                    "unit":       best["unit"],
-                    "year":       year_m.group(1) if year_m else None,
-                    "context":    sentence.strip(),
-                })
+                metric_name = esg_hint.group(0).strip()
+                for num_data in numbers:
+                    events.append({
+                        "type":       "Event",
+                        "event_type": "Observation",
+                        "metric":     metric_name,
+                        "value":      num_data["value"],
+                        "unit":       num_data["unit"],
+                        "year":       num_data["year"],
+                        "context":    sentence.strip(),
+                    })
 
-    logging.info("Extracted %d events/targets via rules", len(events))
+    logging.info("Extracted %d events/targets via strict proximity rules", len(events))
     return events

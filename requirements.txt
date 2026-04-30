@@ -3,9 +3,13 @@ torch
 spacy
 transformers
 requests
+google-genai
+python-dotenv
 pandas
 networkx
 pdfplumber
+numpy
+scikit-learn
 
 # Specialized NLP
 gliner

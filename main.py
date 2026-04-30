@@ -1,25 +1,35 @@
 import logging
 import argparse
 import sys
-import torch
 import json
 from collections import Counter
-# Workaround for Python 3.13 / Torch JIT compatibility issues with DeBERTa models
+import ast
+
+_original_parse = ast.parse
+def _patched_parse(source, *args, **kwargs):
+    try:
+        return _original_parse(source, *args, **kwargs)
+    except IndentationError:
+        return _original_parse("def dummy(): pass", *args, **kwargs)
+ast.parse = _patched_parse
+
+import torch
 torch.jit._state.disable()
 
 from pathlib import Path
 
 from model_loader import load_models
 from parsers.pdf_parser import parse_document
+from parsers.table_processor import process_document_tables
 from discovery.spacy_prescan import run_spacy_prescan
 from discovery.taxonomy import discover_taxonomy
 from classification.esg_topics import classify_esg_topics
 from classification.quant_qual import extract_quant_qual
 from extraction.entity_extract import extract_entities
 from extraction.section_ranker import rank_sections  # used by taxonomy discovery
-from assembly.graph_builder import link_after_enrichment
+from assembly.graph_builder import link_after_enrichment, prune_navigational_noise
 from extraction.relation_extract import extract_relations
-from extraction.llm_relations import infer_complex_relations
+from extraction.llm_relations import resolve_ambiguities
 from extraction.event_extractor import extract_events
 from assembly.dedup import deduplicate_entities
 from assembly.graph_builder import build_graph
@@ -27,11 +37,12 @@ from assembly.exporter import export_kg
 from enrichment.metadata import enrich_metadata
 from enrichment.algorithms import run_graph_algorithms
 from insight.narrative import generate_narrative
+from extraction.table_parser import get_tables_with_context, extract_esg_facts_from_tables
 import networkx as nx
 
 
-OUTPUT_DIR = Path(__file__).resolve().parent / "output"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = Path(r"Z:\graphs")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def write_insights(text: str, destination: Path) -> None:
@@ -40,7 +51,7 @@ def write_insights(text: str, destination: Path) -> None:
 
 
 def main(source_path: str = None, skip_llm: bool = False, relation_threshold: float = 0.08, 
-         llm_only: bool = False, save_intermediates: bool = False) -> None:
+         llm_only: bool = False, graph_only: bool = False, save_intermediates: bool = True) -> None:
     logging.basicConfig(
         level=logging.INFO, 
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -48,16 +59,29 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     )
     source_path = source_path or "input/document.pdf"
     print("\n" + "="*60)
-    print(f"🚀 ESG KNOWLEDGE GRAPH PIPELINE v2.1")
-    print(f"📄 Source: {source_path}")
+    print(f"STARTING ESG KNOWLEDGE GRAPH PIPELINE v2.1")
+    print(f"Source: {source_path}")
     print("="*60 + "\n")
     
     logging.info("[STAGE 1/5] PARSING & DISCOVERY")
     
     document = parse_document(source_path)
-    cache_path = OUTPUT_DIR / "intermediates.json"
+    
+    report_name = Path(source_path).stem
 
-    if llm_only:
+    # --- TABLE PROCESSING INTEGRATION ---
+    original_text = document["text"] # Save raw MD for the structured parser
+    # Linearization is now disabled to reduce noise in favor of structured parsing
+    # document["text"] = process_document_tables(document["text"], json_tables_path)
+    # -------------------------------------
+
+    report_out_dir = OUTPUT_DIR / report_name
+    report_out_dir.mkdir(parents=True, exist_ok=True)
+    
+    cache_path = report_out_dir / "intermediates.json"
+    models = None
+
+    if llm_only or graph_only:
         if not cache_path.exists():
             logging.error("Intermediates cache not found at %s. Run a full pipeline with --save-intermediates first.", cache_path)
             return
@@ -70,19 +94,33 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
             quant_qual = cache.get("quant_qual", {})
             entities = cache.get("entities", [])
             relations = cache.get("relations", [])
+        document["sentences"] = sentences  # attach for downstream modules
     else:
         logging.info("Loading NLP models into RAM...")
         models = load_models()
         logging.info("Running document prescan...")
         prescan = run_spacy_prescan(document, models.nlp)
         sentences = prescan.get("sentences", [])
+        document["sentences"] = sentences  # attach for downstream modules
         
-        taxonomy = discover_taxonomy(document, prescan)
+        taxonomy = discover_taxonomy(document, prescan, models)
         logging.info("Classifying ESG thematic coverage...")
-        topics = classify_esg_topics(document, models)
+        topics = classify_esg_topics(document, models, prescan)
+        
+        # Free memory from classification models
+        models.clear('esg_models') 
+        
+        quant_qual = extract_quant_qual(document)
         logging.info("[STAGE 2/5] EXTRACTION")
         entities = extract_entities(document, models.gliner, sentences)
+        
+        # Free GLiNER before loading GLiREL to save memory peak
+        models.clear('gliner')
+        
         relations = extract_relations(document, models.glirel, sentences, entities)
+        
+        # Free GLiREL and spaCy as they are no longer needed for the rest of the pipeline
+        models.clear()
 
         if save_intermediates:
             logging.info("Saving intermediate data to %s", cache_path)
@@ -104,18 +142,18 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     if main_company:
         logging.info("Global Anchor identified: %s", main_company)
 
-    logging.info("[STAGE 3/5] LLM COMPLEX REASONING (CHUNKED)")
-    if skip_llm:
+    logging.info("[STAGE 3/5] TARGETED LLM DISAMBIGUATION")
+    if skip_llm or graph_only:
         complex_relations = relations
     else:
-        complex_relations = infer_complex_relations(document, relations, main_company=main_company)
+        complex_relations = resolve_ambiguities(document, entities, relations, main_company=main_company)
 
     # 3. Extract rule-based events
     events = extract_events(sentences)
     complex_relations += events
 
     # 4. Graph Assembly
-    deduped_entities = deduplicate_entities(entities)
+    deduped_entities = deduplicate_entities(entities, main_company=main_company)
     graph = build_graph(document, deduped_entities, complex_relations, taxonomy, topics, quant_qual, 
                         relation_threshold=relation_threshold, main_company=main_company)
     
@@ -125,26 +163,52 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     # page_number attributes are only populated by enrich_metadata().
     link_after_enrichment(graph)
 
+    # ── Task 12: Prune Navigational Noise ────────────────────────────────
+    graph = prune_navigational_noise(graph)
+
+    isolated_nodes = list(nx.isolates(graph))
+
+
+    if isolated_nodes:
+        graph.remove_nodes_from(isolated_nodes)
+        logging.info("Pruned %d isolated nodes from the graph to reduce noise", len(isolated_nodes))
+
+    # V2: Structured table extraction (Iteration 3)
+    logging.info("[STAGE 4/5] EXTRACTING STRUCTURED TABLE FACTS")
+    # Use original_text to find |---| patterns before they were linearized
+    tables = get_tables_with_context(original_text)
+    table_facts = extract_esg_facts_from_tables(tables)
+    logging.info("Extracted %d structured facts from tables", len(table_facts))
+
     logging.info("[STAGE 4/5] GRAPH ENRICHMENT & ALGORITHMS")
+    link_after_enrichment(
+        graph, 
+        table_facts=table_facts, 
+        regulatory_map=taxonomy.get("regulatory_map"),
+        models=models
+    )
     graph = run_graph_algorithms(graph)
 
-    logging.info("[STAGE 5/5] INSIGHT GENERATION & EXPORT")
-    # Both paths use generate_narrative — skip_llm forces the structured fallback
-    # inside narrative.py (LLM query is skipped when LLM is unavailable anyway).
-    # This ensures entity-level data always appears in insights.md.
-    narrative = generate_narrative(graph, topics, quant_qual)
-
     # 5. Export
-    graph_path = OUTPUT_DIR / "graph.graphml"
-    insights_path = OUTPUT_DIR / "insights.md"
+    graph_path = report_out_dir / "graph.graphml"
+    insights_path = report_out_dir / "insights.md"
     logging.info("Exporting graph to %s", graph_path)
     nx.write_graphml(graph, str(graph_path))
 
-    logging.info("Exporting insights to %s", insights_path)
-    write_insights(narrative, insights_path)
+    logging.info("[STAGE 5/5] INSIGHT GENERATION & EXPORT")
+    if not graph_only:
+        # Both paths use generate_narrative — skip_llm forces the structured fallback
+        # inside narrative.py (LLM query is skipped when LLM is unavailable anyway).
+        # This ensures entity-level data always appears in insights.md.
+        narrative = generate_narrative(graph, topics, quant_qual, document, output_dir=report_out_dir)
+
+        logging.info("Exporting insights to %s", insights_path)
+        write_insights(narrative, insights_path)
+    else:
+        logging.info("Skipping insight generation (LLM calls) in graph-only mode.")
 
     # V2: Export structured data
-    export_kg(graph, OUTPUT_DIR)
+    export_kg(graph, report_out_dir)
     logging.info("Pipeline finished successfully")
 
 
@@ -153,7 +217,9 @@ if __name__ == "__main__":
     parser.add_argument("source_path", nargs="?", default="input/document.pdf", help="Path to the PDF document.")
     parser.add_argument("--skip-llm", action="store_true", help="Skip LLM-based relation extraction and narrative generation.")
     parser.add_argument("--llm-only", action="store_true", help="Skip extraction and only run LLM steps using cached intermediates.")
-    parser.add_argument("--save-intermediates", action="store_true", help="Save intermediate extraction results to cache.")
+    parser.add_argument("--graph-only", action="store_true", help="Skip NLP models and LLM calls, quickly rebuilding the graph from cache.")
+    parser.add_argument("--no-cache", action="store_false", dest="save_intermediates", help="Do not save intermediate extraction results to cache.")
+    parser.set_defaults(save_intermediates=True)
     parser.add_argument("--relation-threshold", type=float, default=0.08, help="Minimum confidence score for relationships (0.0 to 1.0).")
     
     args = parser.parse_args()
@@ -161,4 +227,5 @@ if __name__ == "__main__":
          skip_llm=args.skip_llm, 
          relation_threshold=args.relation_threshold,
          llm_only=args.llm_only,
-         save_intermediates=args.save_intermediates)
+         graph_only=args.graph_only,
+         save_intermediates=args.save_intermediates)
