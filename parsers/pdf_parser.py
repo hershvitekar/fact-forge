@@ -37,6 +37,9 @@ def parse_document(source_path: str):
                             processed_lines.append(line)
                     
                     page_text = "\n".join(processed_lines)
+                    # Inject a marker that the table parser can use to track pages
+                    page_marker = f"\n<!-- PAGE_BREAK: {i + 1} -->\n"
+                    
                     if page_text:
                         page_text += "\n"
                     
@@ -46,8 +49,8 @@ def parse_document(source_path: str):
                         "start_offset": current_offset,
                         "end_offset": current_offset + len(page_text),
                     })
-                    document["text"] += page_text
-                    current_offset += len(page_text)
+                    document["text"] += page_marker + page_text
+                    current_offset += len(page_marker) + len(page_text)
         except Exception as e:
             logging.error("pdfplumber extraction failed: %s", e)
             return document

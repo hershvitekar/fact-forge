@@ -8,6 +8,8 @@ python-dotenv
 pandas
 networkx
 pdfplumber
+numpy
+scikit-learn
 
 # Specialized NLP
 gliner

@@ -70,7 +70,9 @@ class Models:
             self._esg_models[model_name] = pipeline(
                 "text-classification", 
                 model=model_name, 
-                tokenizer=tokenizer
+                tokenizer=tokenizer,
+                truncation=True,
+                max_length=512
             )
         return self._esg_models[model_name]
 

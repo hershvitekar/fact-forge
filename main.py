@@ -37,11 +37,12 @@ from assembly.exporter import export_kg
 from enrichment.metadata import enrich_metadata
 from enrichment.algorithms import run_graph_algorithms
 from insight.narrative import generate_narrative
+from extraction.table_parser import get_tables_with_context, extract_esg_facts_from_tables
 import networkx as nx
 
 
-OUTPUT_DIR = Path(__file__).resolve().parent / "output"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = Path(r"Z:\graphs")
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def write_insights(text: str, destination: Path) -> None:
@@ -50,7 +51,7 @@ def write_insights(text: str, destination: Path) -> None:
 
 
 def main(source_path: str = None, skip_llm: bool = False, relation_threshold: float = 0.08, 
-         llm_only: bool = False, save_intermediates: bool = True) -> None:
+         llm_only: bool = False, graph_only: bool = False, save_intermediates: bool = True) -> None:
     logging.basicConfig(
         level=logging.INFO, 
         format="%(asctime)s [%(levelname)s] %(message)s",
@@ -69,22 +70,18 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     report_name = Path(source_path).stem
 
     # --- TABLE PROCESSING INTEGRATION ---
-    if source_path.endswith(".md"):
-        json_tables_path = Path(source_path).parent / f"{report_name}_tables.json"
-        logging.info("Attempting to linearize tables from %s", json_tables_path)
-        document["text"] = process_document_tables(document["text"], json_tables_path)
-        # Update pages text as well since it's used in some modules
-        if document["pages"]:
-            document["pages"][0]["text"] = document["text"]
-            document["pages"][0]["end_offset"] = len(document["text"])
+    original_text = document["text"] # Save raw MD for the structured parser
+    # Linearization is now disabled to reduce noise in favor of structured parsing
+    # document["text"] = process_document_tables(document["text"], json_tables_path)
     # -------------------------------------
 
     report_out_dir = OUTPUT_DIR / report_name
     report_out_dir.mkdir(parents=True, exist_ok=True)
     
     cache_path = report_out_dir / "intermediates.json"
+    models = None
 
-    if llm_only:
+    if llm_only or graph_only:
         if not cache_path.exists():
             logging.error("Intermediates cache not found at %s. Run a full pipeline with --save-intermediates first.", cache_path)
             return
@@ -106,9 +103,9 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
         sentences = prescan.get("sentences", [])
         document["sentences"] = sentences  # attach for downstream modules
         
-        taxonomy = discover_taxonomy(document, prescan)
+        taxonomy = discover_taxonomy(document, prescan, models)
         logging.info("Classifying ESG thematic coverage...")
-        topics = classify_esg_topics(document, models)
+        topics = classify_esg_topics(document, models, prescan)
         
         # Free memory from classification models
         models.clear('esg_models') 
@@ -146,7 +143,7 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
         logging.info("Global Anchor identified: %s", main_company)
 
     logging.info("[STAGE 3/5] TARGETED LLM DISAMBIGUATION")
-    if skip_llm:
+    if skip_llm or graph_only:
         complex_relations = relations
     else:
         complex_relations = resolve_ambiguities(document, entities, relations, main_company=main_company)
@@ -176,14 +173,21 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
         graph.remove_nodes_from(isolated_nodes)
         logging.info("Pruned %d isolated nodes from the graph to reduce noise", len(isolated_nodes))
 
-    logging.info("[STAGE 4/5] GRAPH ENRICHMENT & ALGORITHMS")
-    graph = run_graph_algorithms(graph)
+    # V2: Structured table extraction (Iteration 3)
+    logging.info("[STAGE 4/5] EXTRACTING STRUCTURED TABLE FACTS")
+    # Use original_text to find |---| patterns before they were linearized
+    tables = get_tables_with_context(original_text)
+    table_facts = extract_esg_facts_from_tables(tables)
+    logging.info("Extracted %d structured facts from tables", len(table_facts))
 
-    logging.info("[STAGE 5/5] INSIGHT GENERATION & EXPORT")
-    # Both paths use generate_narrative — skip_llm forces the structured fallback
-    # inside narrative.py (LLM query is skipped when LLM is unavailable anyway).
-    # This ensures entity-level data always appears in insights.md.
-    narrative = generate_narrative(graph, topics, quant_qual, document, output_dir=report_out_dir)
+    logging.info("[STAGE 4/5] GRAPH ENRICHMENT & ALGORITHMS")
+    link_after_enrichment(
+        graph, 
+        table_facts=table_facts, 
+        regulatory_map=taxonomy.get("regulatory_map"),
+        models=models
+    )
+    graph = run_graph_algorithms(graph)
 
     # 5. Export
     graph_path = report_out_dir / "graph.graphml"
@@ -191,8 +195,17 @@ def main(source_path: str = None, skip_llm: bool = False, relation_threshold: fl
     logging.info("Exporting graph to %s", graph_path)
     nx.write_graphml(graph, str(graph_path))
 
-    logging.info("Exporting insights to %s", insights_path)
-    write_insights(narrative, insights_path)
+    logging.info("[STAGE 5/5] INSIGHT GENERATION & EXPORT")
+    if not graph_only:
+        # Both paths use generate_narrative — skip_llm forces the structured fallback
+        # inside narrative.py (LLM query is skipped when LLM is unavailable anyway).
+        # This ensures entity-level data always appears in insights.md.
+        narrative = generate_narrative(graph, topics, quant_qual, document, output_dir=report_out_dir)
+
+        logging.info("Exporting insights to %s", insights_path)
+        write_insights(narrative, insights_path)
+    else:
+        logging.info("Skipping insight generation (LLM calls) in graph-only mode.")
 
     # V2: Export structured data
     export_kg(graph, report_out_dir)
@@ -204,6 +217,7 @@ if __name__ == "__main__":
     parser.add_argument("source_path", nargs="?", default="input/document.pdf", help="Path to the PDF document.")
     parser.add_argument("--skip-llm", action="store_true", help="Skip LLM-based relation extraction and narrative generation.")
     parser.add_argument("--llm-only", action="store_true", help="Skip extraction and only run LLM steps using cached intermediates.")
+    parser.add_argument("--graph-only", action="store_true", help="Skip NLP models and LLM calls, quickly rebuilding the graph from cache.")
     parser.add_argument("--no-cache", action="store_false", dest="save_intermediates", help="Do not save intermediate extraction results to cache.")
     parser.set_defaults(save_intermediates=True)
     parser.add_argument("--relation-threshold", type=float, default=0.08, help="Minimum confidence score for relationships (0.0 to 1.0).")
@@ -213,4 +227,5 @@ if __name__ == "__main__":
          skip_llm=args.skip_llm, 
          relation_threshold=args.relation_threshold,
          llm_only=args.llm_only,
-         save_intermediates=args.save_intermediates)
+         graph_only=args.graph_only,
+         save_intermediates=args.save_intermediates)
