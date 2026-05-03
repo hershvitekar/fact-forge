@@ -106,6 +106,69 @@ def linearize_grid(grid):
                     
     return facts
 
+def extract_structured_facts(grid):
+    """Converts a table grid into a list of structured fact dictionaries."""
+    if not grid:
+        return []
+
+    num_rows = len(grid)
+    num_cols = len(grid[0])
+    
+    # Identify headers
+    col_headers = []
+    if any(cell.get("column_header") for cell in grid[0]):
+        col_headers = [cell.get("text", "").strip() for cell in grid[0]]
+    
+    facts = []
+    
+    # If it's a simple 2-column key-value table
+    if num_cols == 2 and not col_headers:
+        for row in grid:
+            if len(row) < 2: continue
+            key = row[0].get("text", "").strip()
+            val = row[1].get("text", "").strip()
+            if key and val:
+                facts.append({
+                    "metric": key,
+                    "value": val,
+                    "unit": None,
+                    "year": None,
+                    "source": "table"
+                })
+        return facts
+
+    # General grid processing
+    for r_idx, row in enumerate(grid):
+        if col_headers and r_idx == 0:
+            continue
+            
+        row_header = ""
+        for c_idx, cell in enumerate(row):
+            text = cell.get("text", "").strip()
+            if not text:
+                continue
+                
+            if cell.get("row_header") or (c_idx == 0 and not col_headers):
+                row_header = text
+            else:
+                col_name = col_headers[c_idx] if c_idx < len(col_headers) else f"Column {c_idx}"
+                
+                # Attempt to extract year from context
+                year_match = re.search(r'\b(20\d{2})\b', col_name)
+                year = int(year_match.group(1)) if year_match else None
+                
+                metric_name = row_header if row_header else f"Unknown Metric (from {col_name})"
+                
+                facts.append({
+                    "metric": metric_name,
+                    "value": text,
+                    "unit": None,
+                    "year": year,
+                    "source": "table"
+                })
+                    
+    return facts
+
 if __name__ == "__main__":
     # Quick syntax check
     test_text = "| A | B |\n|---|---|\n| 1 | 2 |"

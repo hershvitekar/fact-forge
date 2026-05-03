@@ -18,3 +18,8 @@ sentence-transformers
 
 # Visualization
 pyvis
+
+# Pipelines & Observability
+llama-index
+llama-index-embeddings-huggingface
+langsmith

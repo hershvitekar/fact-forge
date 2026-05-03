@@ -1,3 +1,9 @@
+from pathlib import Path
+
+# ── Core Paths & Observability ────────────────────────────────────────────────
+INDEX_STORAGE_PATH = Path("data/indices")
+LANGCHAIN_PROJECT = "fact-forge-esg"
+
 # ── LLM Backend (Google Gemini) ───────────────────────────────────────────────
 # API key is read from the GOOGLE_API_KEY environment variable.
 GEMINI_MODEL = "gemini-3-flash-preview"
