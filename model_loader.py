@@ -45,14 +45,14 @@ class Models:
     def gliner(self):
         if self._gliner is None:
             logging.info("Loading GLiNER model: %s", config.GLINER_MODEL)
-            self._gliner = GLiNER.from_pretrained(config.GLINER_MODEL)
+            self._gliner = GLiNER.from_pretrained(config.GLINER_MODEL, proxies='blah', resume_download='blah')
         return self._gliner
 
     @property
     def glirel(self):
         if self._glirel is None:
             logging.info("Loading GLiREL model: %s", config.GLIREL_MODEL)
-            self._glirel = GLiREL.from_pretrained(config.GLIREL_MODEL)
+            self._glirel = GLiREL.from_pretrained(config.GLIREL_MODEL, proxies='blah', resume_download='blah')
         return self._glirel
 
     @property

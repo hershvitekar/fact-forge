@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 from llama_index.core import Document, VectorStoreIndex, StorageContext, load_index_from_storage, Settings
+
+from model_loader import load_models
+from extraction.entity_extract import extract_entities
+from extraction.relation_extract import extract_relations
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from langsmith import traceable
@@ -46,18 +50,55 @@ class DocumentIngestor:
         return index
 
 
-def run_gliner_glirel(text: str, doc_id: str, chunk_id: str) -> List[Dict[str, Any]]:
-    """Mock NLP function for entity/relation extraction."""
-    # In a real implementation, this would invoke the models from config.py
-    return [{
-        "metric": "Scope 1 Emissions",
-        "value": "1000",
-        "unit": "tonnes",
-        "year": 2023,
-        "source": "text",
-        "doc_id": doc_id,
-        "chunk_id": chunk_id
-    }]
+def run_gliner_glirel(text: str, doc_id: str, chunk_id: str, models=None) -> List[Dict[str, Any]]:
+    """Run GLiNER and GLiREL models for entity/relation extraction."""
+    if models is None:
+        logging.warning("Models not loaded. Returning empty facts.")
+        return []
+        
+    doc_dict = {"text": text, "source_path": doc_id}
+    spacy_doc = models.nlp(text)
+    sentences = [sent.text for sent in spacy_doc.sents]
+    
+    if not sentences:
+        return []
+        
+    entities = extract_entities(doc_dict, models.gliner, sentences)
+    relations = extract_relations(doc_dict, models.glirel, sentences, entities)
+    
+    facts = []
+    for rel in relations:
+        if rel["relation"] == "measured_as":
+            metric = rel["head"]
+            value = rel["tail"]
+            
+            year = None
+            unit = None
+            
+            for r in relations:
+                if r["relation"] == "reported_at" and (r["head"] == metric or r["head"] == value):
+                    year = r["tail"]
+                if r["relation"] == "has_unit" and (r["head"] == metric or r["head"] == value):
+                    unit = r["tail"]
+            
+            try:
+                if year:
+                    year_match = re.search(r'\b(20\d{2})\b', year)
+                    year = int(year_match.group(1)) if year_match else None
+            except:
+                year = None
+                
+            facts.append({
+                "metric": metric,
+                "value": value,
+                "unit": unit,
+                "year": year,
+                "source": "text",
+                "doc_id": doc_id,
+                "chunk_id": chunk_id
+            })
+            
+    return facts
 
 
 def standardize_unit(unit: str) -> str:
@@ -70,9 +111,10 @@ def standardize_unit(unit: str) -> str:
 
 
 class ESGExtractor:
-    def __init__(self, doc_id: str, index_storage_path=INDEX_STORAGE_PATH):
+    def __init__(self, doc_id: str, index_storage_path=INDEX_STORAGE_PATH, models=None):
         self.doc_id = doc_id
         self.persist_dir = Path(index_storage_path) / doc_id
+        self.models = models if models is not None else load_models()
         
         if self.persist_dir.exists():
             storage_context = StorageContext.from_defaults(persist_dir=str(self.persist_dir))
@@ -94,7 +136,7 @@ class ESGExtractor:
             doc_id = node.metadata.get("doc_id", self.doc_id)
             chunk_id = node.metadata.get("chunk_id", "unknown")
             text = node.get_content()
-            facts = run_gliner_glirel(text, doc_id, chunk_id)
+            facts = run_gliner_glirel(text, doc_id, chunk_id, self.models)
             all_facts.extend(facts)
         return all_facts
 

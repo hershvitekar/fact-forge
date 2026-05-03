@@ -6,6 +6,11 @@ from pathlib import Path
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 
+import sys
+project_root = Path(__file__).resolve().parent.parent
+sys.path.append(str(project_root))
+from extraction.esg_pipeline import DocumentIngestor
+
 def process_pdf(pdf_file_path):
     # Setup Paths
     input_path = Path(pdf_file_path).resolve()
@@ -23,7 +28,7 @@ def process_pdf(pdf_file_path):
     # Optimization for i5 7th Gen (2-core) & 12GB RAM
     options = PdfPipelineOptions()
     options.do_ocr = False                 # Native PDFs only
-    options.num_threads = 2                # Prevent CPU thrashing
+    # options.num_threads = 2                # Prevent CPU thrashing
     options.table_structure_options.mode = "accurate" # Institutional-grade tables
 
     converter = DocumentConverter(
@@ -47,17 +52,23 @@ def process_pdf(pdf_file_path):
             tables_data.append({
                 "table_index": i,
                 "page_no": table.prov[0].page_no if table.prov else None,
-                "data": table.export_to_dict()
+                "data": table.export_to_dataframe().to_dict()
             })
         
         json_file = out_dir / f"{input_path.stem}_tables.json"
         with open(json_file, "w", encoding="utf-8") as f:
             json.dump(tables_data, f, indent=2)
 
+        # Ingest into VectorStore
+        print("[*] Ingesting into VectorStore...")
+        ingestor = DocumentIngestor()
+        ingestor.ingest(str(md_file), input_path.stem)
+        print("[+] Ingestion complete.")
+
         # Move to Archive
         shutil.move(str(input_path), str(arc_dir / input_path.name))
         
-        print(f"[+] Success: {input_path.name} converted and archived.")
+        print(f"[+] Success: {input_path.name} converted, ingested, and archived.")
 
     except Exception as e:
         print(f"[FAILED] Error processing {input_path.name}: {str(e)}")
